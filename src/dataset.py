@@ -12,6 +12,7 @@ class ChurnDataset:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._dataframe: pd.DataFrame | None = None
+        self._rows: tuple[DatasetRowChurn, ...] | None = None
 
     @property
     def dataframe(self) -> pd.DataFrame:
@@ -19,11 +20,12 @@ class ChurnDataset:
         if self._dataframe is None:
             raise RuntimeError("Dataset is not loaded")
 
-        return self._dataframe
+        return self._dataframe.copy(deep=True)
 
     def load(self) -> pd.DataFrame:
         """Read the CSV file and verify that its table structure is valid."""
         self._dataframe = None
+        self._rows = None
         self._validate_path()
 
         try:
@@ -34,11 +36,21 @@ class ChurnDataset:
             raise ValueError(f"Could not parse CSV file: {self.path}") from error
 
         self._validate_dataframe(dataframe)
+        rows = self._parse_rows(dataframe)
+
         self._dataframe = dataframe
-        return dataframe
+        self._rows = tuple(rows)
+        return self.dataframe
 
     def to_rows(self) -> list[DatasetRowChurn]:
-        records = self.dataframe.to_dict(orient="records")
+        if self._rows is None:
+            raise RuntimeError("Dataset is not loaded")
+
+        return list(self._rows)
+
+    @staticmethod
+    def _parse_rows(dataframe: pd.DataFrame) -> list[DatasetRowChurn]:
+        records = dataframe.to_dict(orient="records")
         rows: list[DatasetRowChurn] = []
 
         for csv_line, record in enumerate(records, start=2):

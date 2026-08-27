@@ -39,3 +39,25 @@ class DatasetRowChurn(FeatureVectorChurn):
     churn: Literal[0, 1] = Field(
         ..., description="Whether the customer churned: 0 or 1"
     )
+
+
+class DatasetInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total_rows: int = Field(
+        ..., ge=0, description="Total number of rows in the dataset"
+    )
+    total_columns: int = Field(
+        ..., ge=0, description="Total number of columns in the dataset"
+    )
+    column_names: list[str] = Field(
+        ..., description="List of column names in the dataset"
+    )
+    churn_distribution: dict[str, int] = Field(
+        ...,
+        description="Distribution of churn values in the dataset"
+    )
+    churn_percentage: dict[str, float] = Field(
+        ...,
+        description="Percentage of churn values in the dataset"
+    )

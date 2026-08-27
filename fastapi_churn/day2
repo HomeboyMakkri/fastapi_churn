@@ -1,0 +1,26 @@
+🤖 🤖 ML FastAPI
+
+📝 День 2: fastapi_churn_day02
+
+День 2 — Pydantic модели для признаков churn
+
+🎯 Цель дня
+Описать структуру входных данных для задачи churn через Pydantic.
+
+📋 Задачи
+1. 📊 Создать Pydantic модель FeatureVectorChurn с полями:
+   - monthly_fee float
+   - usage_hours float
+   - support_requests int
+   - account_age_months int
+   - failed_payments int
+   - region str
+   - device_type str
+   - payment_method str
+   - autopay_enabled int
+
+2. 📋 Создать модель DatasetRowChurn для строки тренировочного датасета которая включает все те же признаки и дополнительное поле churn int
+
+3. 🔗 Добавить временный эндпоинт POST /predict который принимает FeatureVectorChurn и возвращает эти же данные в ответе чтобы убедиться что схема работает
+
+4. 🔍 Проверить структуру входных и выходных данных через /docs
