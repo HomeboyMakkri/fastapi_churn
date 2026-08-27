@@ -97,7 +97,7 @@ async def test_preview_rejects_invalid_count(
     client: httpx2.AsyncClient,
     count: object,
 ) -> None:
-    response = await client.get("/dataset/preview", params={"count": count})
+    response = await client.get("/dataset/preview", params={"count": count}) # type: ignore
 
     assert response.status_code == 422
 
