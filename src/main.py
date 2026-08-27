@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, cast
@@ -14,7 +14,7 @@ DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dataset = ChurnDataset(DATASET_PATH)
     dataset.load()
     app.state.churn_dataset = dataset
