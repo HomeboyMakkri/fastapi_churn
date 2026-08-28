@@ -1,0 +1,19 @@
+📝 День 8: fastapi_churn_day08
+
+День 8 — Конфигурация обучения и выбор модели churn
+
+🎯 Цель дня
+Позволить управлять типом модели и её параметрами при обучении.
+
+📋 Задачи
+1. 📋 Создать Pydantic модель TrainingConfigChurn с полями:
+   - model_type — строка (например logreg или random_forest)
+   - hyperparameters — словарь с гиперпараметрами
+
+2. 🔗 Обновить эндпоинт /model/train так чтобы он принимал TrainingConfigChurn
+
+3. 🤖 Реализовать выбор модели по model_type и создание экземпляра LogisticRegression или RandomForestClassifier с указанными hyperparameters
+
+4. 💾 Сохранять вместе с моделью информацию о типе и гиперпараметрах
+
+5. 🔍 В эндпоинте /model/status показывать тип модели и основные гиперпараметры
