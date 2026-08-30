@@ -97,7 +97,10 @@ async def test_preview_rejects_invalid_count(
     client: httpx2.AsyncClient,
     count: object,
 ) -> None:
-    response = await client.get("/dataset/preview", params={"count": count}) # type: ignore
+    response = await client.get(
+        "/dataset/preview",
+        params={"count": count},  # type: ignore[dict-item]
+    )
 
     assert response.status_code == 422
 
@@ -113,3 +116,21 @@ async def test_dataset_info_matches_dataset(client: httpx2.AsyncClient) -> None:
     assert payload["churn_distribution"] == {"0": 1597, "1": 403}
     assert payload["churn_percentage"] == {"0": 79.85, "1": 20.15}
     assert sum(payload["churn_distribution"].values()) == payload["total_rows"]
+
+
+async def test_dataset_split_info_matches_stratified_split(
+    client: httpx2.AsyncClient,
+) -> None:
+    response = await client.get("/dataset/split-info")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "train_rows": 1600,
+        "test_rows": 400,
+        "feature_count": 9,
+        "train_churn_distribution": {"0": 1278, "1": 322},
+        "test_churn_distribution": {"0": 319, "1": 81},
+        "train_churn_percentage": {"0": 79.88, "1": 20.12},
+        "test_churn_percentage": {"0": 79.75, "1": 20.25},
+    }

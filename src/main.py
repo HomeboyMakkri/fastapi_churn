@@ -6,7 +6,17 @@ from typing import Annotated, cast
 from fastapi import Depends, FastAPI, Query, Request
 
 from .dataset import ChurnDataset
-from .schemas import DatasetInfo, DatasetRowChurn, FeatureVectorChurn
+from .preprocessing import (
+    get_class_distribution,
+    get_class_percentage,
+    prepare_and_split,
+)
+from .schemas import (
+    DatasetInfo,
+    DatasetRowChurn,
+    DatasetSplitInfo,
+    FeatureVectorChurn,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +54,7 @@ PreviewCount = Annotated[
 def read_root():
     return {"message": "ml churn server is running"}
 
+
 @app.post("/predict", response_model=FeatureVectorChurn)
 def predict_churn(feature_vector: FeatureVectorChurn) -> FeatureVectorChurn:
     return feature_vector
@@ -61,21 +72,29 @@ def preview_dataset(
 def get_dataset_info(dataset: DatasetDependency) -> DatasetInfo:
     dataframe = dataset.dataframe
     total_rows, total_columns = dataframe.shape
-    churn_counts = dataframe["churn"].value_counts()
-
-    churn_distribution = {
-        str(churn_class): int(churn_counts.get(churn_class, 0))
-        for churn_class in (0, 1)
-    }
-    churn_percentage = {
-        churn_class: round((count / total_rows) * 100, 2)
-        for churn_class, count in churn_distribution.items()
-    }
+    target = dataframe["churn"]
 
     return DatasetInfo(
         total_rows=total_rows,
         total_columns=total_columns,
         column_names=dataframe.columns.tolist(),
-        churn_distribution=churn_distribution,
-        churn_percentage=churn_percentage,
+        churn_distribution=get_class_distribution(target),
+        churn_percentage=get_class_percentage(target),
+    )
+
+
+@app.get("/dataset/split-info", response_model=DatasetSplitInfo)
+def get_dataset_split_info(
+    dataset: DatasetDependency,
+) -> DatasetSplitInfo:
+    X_train, X_test, y_train, y_test = prepare_and_split(dataset.dataframe)
+
+    return DatasetSplitInfo(
+        train_rows=len(X_train),
+        test_rows=len(X_test),
+        feature_count=X_train.shape[1],
+        train_churn_distribution=get_class_distribution(y_train),
+        test_churn_distribution=get_class_distribution(y_test),
+        train_churn_percentage=get_class_percentage(y_train),
+        test_churn_percentage=get_class_percentage(y_test),
     )

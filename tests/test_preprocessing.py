@@ -8,6 +8,8 @@ from src.preprocessing import (
     FEATURES,
     NUMERIC_FEATURES,
     TARGET_COLUMN,
+    get_class_distribution,
+    get_class_percentage,
     prepare_and_split,
     prepare_features_and_target,
 )
@@ -167,3 +169,30 @@ def test_rejects_invalid_split_argument_types(
 
     with pytest.raises(TypeError, match=message):
         prepare_and_split(make_dataframe(), **arguments)  # type: ignore[arg-type]
+
+
+def test_reports_class_counts_and_percentages() -> None:
+    target = pd.Series([0, 0, 0, 1], name=TARGET_COLUMN)
+
+    assert get_class_distribution(target) == {"0": 3, "1": 1}
+    assert get_class_percentage(target) == {"0": 75.0, "1": 25.0}
+
+
+def test_distribution_includes_an_absent_class() -> None:
+    target = pd.Series([0, 0], name=TARGET_COLUMN)
+
+    assert get_class_distribution(target) == {"0": 2, "1": 0}
+    assert get_class_percentage(target) == {"0": 100.0, "1": 0.0}
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        pd.Series([], dtype="int64"),
+        pd.Series([0, None]),
+        pd.Series([0, 2]),
+    ],
+)
+def test_rejects_invalid_target_for_distribution(target: pd.Series) -> None:
+    with pytest.raises(ValueError):
+        get_class_distribution(target)

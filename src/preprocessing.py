@@ -5,26 +5,13 @@ from math import ceil
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+from .dataset_contract import CHURN_DATASET_CONTRACT
 
-TARGET_COLUMN = "churn"
 
-NUMERIC_FEATURES: tuple[str, ...] = (
-    "monthly_fee",
-    "usage_hours",
-    "support_requests",
-    "account_age_months",
-    "failed_payments",
-    "autopay_enabled",
-)
-
-CATEGORICAL_FEATURES: tuple[str, ...] = (
-    "region",
-    "device_type",
-    "payment_method",
-)
-
-FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-EXPECTED_COLUMNS = frozenset((*FEATURES, TARGET_COLUMN))
+TARGET_COLUMN = CHURN_DATASET_CONTRACT.target
+NUMERIC_FEATURES = CHURN_DATASET_CONTRACT.numeric_features
+CATEGORICAL_FEATURES = CHURN_DATASET_CONTRACT.categorical_features
+FEATURES = CHURN_DATASET_CONTRACT.features
 
 FeatureTarget = tuple[pd.DataFrame, pd.Series]
 DatasetSplit = tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]
@@ -37,22 +24,11 @@ def prepare_features_and_target(dataframe: pd.DataFrame) -> FeatureTarget:
     modified, and duplicate rows are retained because they can represent
     distinct customers when the dataset has no customer identifier.
     """
-    if not isinstance(dataframe, pd.DataFrame):
-        raise TypeError("dataframe must be a pandas DataFrame")
+    CHURN_DATASET_CONTRACT.validate_columns(dataframe)
 
-    actual_columns = set(dataframe.columns)
-    missing_columns = EXPECTED_COLUMNS - actual_columns
-    unexpected_columns = actual_columns - EXPECTED_COLUMNS
-
-    if missing_columns or unexpected_columns:
-        details: list[str] = []
-        if missing_columns:
-            details.append(f"missing: {sorted(missing_columns)}")
-        if unexpected_columns:
-            details.append(f"unexpected: {sorted(unexpected_columns)}")
-        raise ValueError(f"Invalid preprocessing columns ({'; '.join(details)})")
-
-    cleaned = dataframe.dropna(subset=list(EXPECTED_COLUMNS)).copy(deep=True)
+    cleaned = dataframe.dropna(
+        subset=list(CHURN_DATASET_CONTRACT.columns)
+    ).copy(deep=True)
     if cleaned.empty:
         raise ValueError("Dataset contains no rows after removing missing values")
 
@@ -105,3 +81,38 @@ def prepare_and_split(
         stratify=target,
     )
     return X_train, X_test, y_train, y_test
+
+
+def get_class_distribution(target: pd.Series) -> dict[str, int]:
+    """Return counts for both churn classes using JSON-compatible keys."""
+    _validate_distribution_target(target)
+    counts = target.value_counts()
+    return {
+        str(churn_class): int(counts.get(churn_class, 0))
+        for churn_class in (0, 1)
+    }
+
+
+def get_class_percentage(target: pd.Series) -> dict[str, float]:
+    """Return percentages for both churn classes."""
+    distribution = get_class_distribution(target)
+    total = len(target)
+
+    return {
+        churn_class: round(count / total * 100, 2)
+        for churn_class, count in distribution.items()
+    }
+
+
+def _validate_distribution_target(target: pd.Series) -> None:
+    if not isinstance(target, pd.Series):
+        raise TypeError("target must be a pandas Series")
+    if target.empty:
+        raise ValueError("Cannot calculate class distribution for an empty target")
+    if target.isna().any():
+        raise ValueError("Target contains missing values")
+
+    invalid_values = set(target.unique()) - {0, 1}
+    if invalid_values:
+        formatted_values = sorted((repr(value) for value in invalid_values))
+        raise ValueError(f"Target contains invalid values: {formatted_values}")

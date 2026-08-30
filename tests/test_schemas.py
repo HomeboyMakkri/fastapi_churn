@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.schemas import DatasetRowChurn, FeatureVectorChurn
+from src.schemas import DatasetRowChurn, DatasetSplitInfo, FeatureVectorChurn
 
 
 def test_feature_vector_accepts_valid_data(valid_record: dict[str, object]) -> None:
@@ -68,3 +68,35 @@ def test_dataset_row_rejects_invalid_target(
 
     with pytest.raises(ValidationError):
         DatasetRowChurn.model_validate(valid_record)
+
+
+def test_dataset_split_info_accepts_valid_summary() -> None:
+    split_info = DatasetSplitInfo(
+        train_rows=80,
+        test_rows=20,
+        feature_count=9,
+        train_churn_distribution={"0": 64, "1": 16},
+        test_churn_distribution={"0": 16, "1": 4},
+        train_churn_percentage={"0": 80.0, "1": 20.0},
+        test_churn_percentage={"0": 80.0, "1": 20.0},
+    )
+
+    assert split_info.train_rows == 80
+    assert split_info.feature_count == 9
+
+
+@pytest.mark.parametrize("field", ["train_rows", "test_rows", "feature_count"])
+def test_dataset_split_info_rejects_nonpositive_sizes(field: str) -> None:
+    payload = {
+        "train_rows": 80,
+        "test_rows": 20,
+        "feature_count": 9,
+        "train_churn_distribution": {"0": 64, "1": 16},
+        "test_churn_distribution": {"0": 16, "1": 4},
+        "train_churn_percentage": {"0": 80.0, "1": 20.0},
+        "test_churn_percentage": {"0": 80.0, "1": 20.0},
+    }
+    payload[field] = 0
+
+    with pytest.raises(ValidationError):
+        DatasetSplitInfo.model_validate(payload)

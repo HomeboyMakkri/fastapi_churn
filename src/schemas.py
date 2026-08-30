@@ -61,3 +61,23 @@ class DatasetInfo(BaseModel):
         ...,
         description="Percentage of churn values in the dataset"
     )
+
+
+class DatasetSplitInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    train_rows: int = Field(..., ge=1, description="Number of training rows")
+    test_rows: int = Field(..., ge=1, description="Number of test rows")
+    feature_count: int = Field(..., ge=1, description="Number of input features")
+    train_churn_distribution: dict[str, int] = Field(
+        ..., description="Churn class counts in the training set"
+    )
+    test_churn_distribution: dict[str, int] = Field(
+        ..., description="Churn class counts in the test set"
+    )
+    train_churn_percentage: dict[str, float] = Field(
+        ..., description="Churn class percentages in the training set"
+    )
+    test_churn_percentage: dict[str, float] = Field(
+        ..., description="Churn class percentages in the test set"
+    )

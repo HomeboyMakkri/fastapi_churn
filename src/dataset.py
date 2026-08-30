@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 from pydantic import ValidationError
 
+from src.dataset_contract import CHURN_DATASET_CONTRACT
 from src.schemas import DatasetRowChurn
 
 
@@ -77,21 +78,7 @@ class ChurnDataset:
 
     @staticmethod
     def _validate_dataframe(dataframe: pd.DataFrame) -> None:
+        CHURN_DATASET_CONTRACT.validate_columns(dataframe)
+
         if dataframe.empty:
             raise ValueError("Dataset contains no data rows")
-
-        expected_columns = set(DatasetRowChurn.model_fields)
-        actual_columns = set(dataframe.columns)
-        missing_columns = expected_columns - actual_columns
-        unexpected_columns = actual_columns - expected_columns
-
-        if missing_columns or unexpected_columns:
-            details: list[str] = []
-
-            if missing_columns:
-                details.append(f"missing: {sorted(missing_columns)}")
-
-            if unexpected_columns:
-                details.append(f"unexpected: {sorted(unexpected_columns)}")
-
-            raise ValueError(f"Invalid dataset columns ({'; '.join(details)})")
