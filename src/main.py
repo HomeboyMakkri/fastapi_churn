@@ -3,9 +3,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, cast
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from sklearn.metrics import accuracy_score, f1_score
 
 from .dataset import ChurnDataset
+from .model import train_churn_model
 from .preprocessing import (
     get_class_distribution,
     get_class_percentage,
@@ -16,6 +18,7 @@ from .schemas import (
     DatasetRowChurn,
     DatasetSplitInfo,
     FeatureVectorChurn,
+    ModelTrainingInfo,
 )
 
 
@@ -26,8 +29,12 @@ DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dataset = ChurnDataset(DATASET_PATH)
-    dataset.load()
-    app.state.churn_dataset = dataset
+    try:
+        dataset.load()
+    except (OSError, ValueError):
+        app.state.churn_dataset = None
+    else:
+        app.state.churn_dataset = dataset
     yield
 
 
@@ -40,7 +47,14 @@ app = FastAPI(
 
 
 def get_dataset(request: Request) -> ChurnDataset:
-    return cast(ChurnDataset, request.app.state.churn_dataset)
+    dataset = getattr(request.app.state, "churn_dataset", None)
+    if dataset is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Churn dataset is not available",
+        )
+
+    return cast(ChurnDataset, dataset)
 
 
 DatasetDependency = Annotated[ChurnDataset, Depends(get_dataset)]
@@ -97,4 +111,30 @@ def get_dataset_split_info(
         test_churn_distribution=get_class_distribution(y_test),
         train_churn_percentage=get_class_percentage(y_train),
         test_churn_percentage=get_class_percentage(y_test),
+    )
+
+
+@app.post("/model/train", response_model=ModelTrainingInfo)
+def train_model(dataset: DatasetDependency) -> ModelTrainingInfo:
+    try:
+        dataframe = dataset.dataframe
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Churn dataset is not loaded",
+        ) from error
+
+    if dataframe.empty:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Churn dataset is empty",
+        )
+
+    X_train, X_test, y_train, y_test = prepare_and_split(dataframe)
+    pipeline = train_churn_model(X_train, y_train)
+    predictions = pipeline.predict(X_test)
+
+    return ModelTrainingInfo(
+        accuracy=float(accuracy_score(y_test, predictions)),
+        f1=float(f1_score(y_test, predictions)),
     )

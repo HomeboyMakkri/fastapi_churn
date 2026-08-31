@@ -1,12 +1,26 @@
 from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import cast
 
 import httpx2
+import pandas as pd
 import pytest
 
-from src.main import app, lifespan
+from src.dataset import ChurnDataset
+from src.main import app, get_dataset, lifespan
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_lifespan_keeps_service_available_without_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.main.DATASET_PATH", tmp_path / "missing.csv")
+
+    async with lifespan(app):
+        assert app.state.churn_dataset is None
 
 
 @pytest.fixture
@@ -134,3 +148,66 @@ async def test_dataset_split_info_matches_stratified_split(
         "train_churn_percentage": {"0": 79.88, "1": 20.12},
         "test_churn_percentage": {"0": 79.75, "1": 20.25},
     }
+
+
+async def test_model_train_returns_test_metrics(
+    client: httpx2.AsyncClient,
+) -> None:
+    response = await client.post("/model/train")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "accuracy": pytest.approx(0.7875),
+        "f1": pytest.approx(0.0449438202247191),
+    }
+
+
+async def test_model_train_returns_503_when_dataset_is_unavailable(
+    client: httpx2.AsyncClient,
+) -> None:
+    dataset = app.state.churn_dataset
+    del app.state.churn_dataset
+
+    try:
+        response = await client.post("/model/train")
+    finally:
+        app.state.churn_dataset = dataset
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Churn dataset is not available"}
+
+
+class DatasetStub:
+    def __init__(self, dataframe: pd.DataFrame | None) -> None:
+        self._dataframe = dataframe
+
+    @property
+    def dataframe(self) -> pd.DataFrame:
+        if self._dataframe is None:
+            raise RuntimeError("Dataset is not loaded")
+        return self._dataframe.copy(deep=True)
+
+
+@pytest.mark.parametrize(
+    ("dataframe", "detail"),
+    [
+        (None, "Churn dataset is not loaded"),
+        (pd.DataFrame(), "Churn dataset is empty"),
+    ],
+)
+async def test_model_train_returns_503_for_unusable_dataset(
+    client: httpx2.AsyncClient,
+    dataframe: pd.DataFrame | None,
+    detail: str,
+) -> None:
+    stub = cast(ChurnDataset, DatasetStub(dataframe))
+    app.dependency_overrides[get_dataset] = lambda: stub
+
+    try:
+        response = await client.post("/model/train")
+    finally:
+        app.dependency_overrides.pop(get_dataset, None)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": detail}

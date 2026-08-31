@@ -3,7 +3,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.schemas import DatasetRowChurn, DatasetSplitInfo, FeatureVectorChurn
+from src.schemas import (
+    DatasetRowChurn,
+    DatasetSplitInfo,
+    FeatureVectorChurn,
+    ModelTrainingInfo,
+)
 
 
 def test_feature_vector_accepts_valid_data(valid_record: dict[str, object]) -> None:
@@ -100,3 +105,29 @@ def test_dataset_split_info_rejects_nonpositive_sizes(field: str) -> None:
 
     with pytest.raises(ValidationError):
         DatasetSplitInfo.model_validate(payload)
+
+
+def test_model_training_info_accepts_valid_metrics() -> None:
+    metrics = ModelTrainingInfo(accuracy=0.8, f1=0.5)
+
+    assert metrics.model_dump() == {"accuracy": 0.8, "f1": 0.5}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("accuracy", -0.01),
+        ("accuracy", 1.01),
+        ("f1", -0.01),
+        ("f1", 1.01),
+    ],
+)
+def test_model_training_info_rejects_metrics_outside_unit_interval(
+    field: str,
+    value: float,
+) -> None:
+    payload = {"accuracy": 0.8, "f1": 0.5}
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        ModelTrainingInfo.model_validate(payload)

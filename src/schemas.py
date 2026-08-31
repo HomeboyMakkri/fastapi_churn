@@ -81,3 +81,14 @@ class DatasetSplitInfo(BaseModel):
     test_churn_percentage: dict[str, float] = Field(
         ..., description="Churn class percentages in the test set"
     )
+
+
+class ModelTrainingInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accuracy: float = Field(
+        ..., ge=0, le=1, description="Accuracy of the trained model"
+    )
+    f1: float = Field(
+        ..., ge=0, le=1, description="F1 score of the trained model"
+    )
