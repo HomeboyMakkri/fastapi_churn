@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, cast
 
@@ -8,6 +9,12 @@ from sklearn.metrics import accuracy_score, f1_score
 
 from .dataset import ChurnDataset
 from .model import train_churn_model
+from .model_store import (
+    ChurnModelArtifact,
+    ModelPersistenceError,
+    load_churn_model,
+    save_churn_model,
+)
 from .preprocessing import (
     get_class_distribution,
     get_class_percentage,
@@ -24,17 +31,27 @@ from .schemas import (
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
+MODEL_PATH = PROJECT_ROOT / "models" / "churn_model.joblib"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    app.state.churn_dataset = None
+    app.state.churn_model = None
+
     dataset = ChurnDataset(DATASET_PATH)
     try:
         dataset.load()
     except (OSError, ValueError):
-        app.state.churn_dataset = None
+        pass
     else:
         app.state.churn_dataset = dataset
+
+    try:
+        app.state.churn_model = load_churn_model(MODEL_PATH)
+    except (OSError, ValueError, ModelPersistenceError):
+        pass
+
     yield
 
 
@@ -70,7 +87,9 @@ def read_root():
 
 
 @app.post("/predict", response_model=FeatureVectorChurn)
-def predict_churn(feature_vector: FeatureVectorChurn) -> FeatureVectorChurn:
+def predict_churn(
+    feature_vector: FeatureVectorChurn,
+) -> FeatureVectorChurn:
     return feature_vector
 
 
@@ -115,7 +134,10 @@ def get_dataset_split_info(
 
 
 @app.post("/model/train", response_model=ModelTrainingInfo)
-def train_model(dataset: DatasetDependency) -> ModelTrainingInfo:
+def train_model(
+    request: Request,
+    dataset: DatasetDependency,
+) -> ModelTrainingInfo:
     try:
         dataframe = dataset.dataframe
     except RuntimeError as error:
@@ -133,8 +155,20 @@ def train_model(dataset: DatasetDependency) -> ModelTrainingInfo:
     X_train, X_test, y_train, y_test = prepare_and_split(dataframe)
     pipeline = train_churn_model(X_train, y_train)
     predictions = pipeline.predict(X_test)
+    accuracy = float(accuracy_score(y_test, predictions))
+    f1 = float(f1_score(y_test, predictions))
+
+    artifact = ChurnModelArtifact(
+        pipeline=pipeline,
+        trained_at=datetime.now(timezone.utc),
+        accuracy=accuracy,
+        f1=f1,
+    )
+
+    save_churn_model(artifact, MODEL_PATH)
+    request.app.state.churn_model = artifact
 
     return ModelTrainingInfo(
-        accuracy=float(accuracy_score(y_test, predictions)),
-        f1=float(f1_score(y_test, predictions)),
+        accuracy=accuracy,
+        f1=f1,
     )

@@ -29,3 +29,6 @@ htmlcov/
 # Local Codex metadata
 .agents/
 .codex/
+
+# Trained model artifacts
+models/*.joblib

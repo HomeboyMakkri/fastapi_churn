@@ -8,6 +8,7 @@ import pytest
 
 from src.dataset import ChurnDataset
 from src.main import app, get_dataset, lifespan
+from src.model_store import ChurnModelArtifact, load_churn_model
 
 
 pytestmark = pytest.mark.anyio
@@ -18,13 +19,19 @@ async def test_lifespan_keeps_service_available_without_dataset(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("src.main.DATASET_PATH", tmp_path / "missing.csv")
+    monkeypatch.setattr("src.main.MODEL_PATH", tmp_path / "missing.joblib")
 
     async with lifespan(app):
         assert app.state.churn_dataset is None
+        assert app.state.churn_model is None
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[httpx2.AsyncClient]:
+async def client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> AsyncIterator[httpx2.AsyncClient]:
+    monkeypatch.setattr("src.main.MODEL_PATH", tmp_path / "churn_model.joblib")
     transport = httpx2.ASGITransport(app=app)
 
     async with lifespan(app):
@@ -161,6 +168,38 @@ async def test_model_train_returns_test_metrics(
         "accuracy": pytest.approx(0.7875),
         "f1": pytest.approx(0.0449438202247191),
     }
+
+
+async def test_model_train_persists_model_and_lifespan_restores_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "models" / "churn_model.joblib"
+    monkeypatch.setattr("src.main.MODEL_PATH", model_path)
+    transport = httpx2.ASGITransport(app=app)
+
+    async with lifespan(app):
+        async with httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as test_client:
+            response = await test_client.post("/model/train")
+
+        in_memory_artifact = app.state.churn_model
+        assert response.status_code == 200
+        assert isinstance(in_memory_artifact, ChurnModelArtifact)
+        assert in_memory_artifact.trained_at.utcoffset() is not None
+
+    restored_from_disk = load_churn_model(model_path)
+    async with lifespan(app):
+        restored_from_lifespan = app.state.churn_model
+
+        assert isinstance(restored_from_lifespan, ChurnModelArtifact)
+        assert restored_from_lifespan.trained_at == restored_from_disk.trained_at
+        assert restored_from_lifespan.accuracy == pytest.approx(
+            response.json()["accuracy"]
+        )
+        assert restored_from_lifespan.f1 == pytest.approx(response.json()["f1"])
 
 
 async def test_model_train_returns_503_when_dataset_is_unavailable(
