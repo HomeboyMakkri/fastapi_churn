@@ -1,6 +1,7 @@
-from typing import Literal
+from datetime import datetime
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class FeatureVectorChurn(BaseModel):
@@ -92,3 +93,32 @@ class ModelTrainingInfo(BaseModel):
     f1: float = Field(
         ..., ge=0, le=1, description="F1 score of the trained model"
     )
+
+
+class ModelStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_trained: bool = Field(
+        ..., description="Whether a trained churn model is available"
+    )
+    last_trained_at: datetime | None = Field(
+        ..., description="UTC timestamp of the latest successful training"
+    )
+    metrics: ModelTrainingInfo | None = Field(
+        ..., description="Metrics calculated on the test dataset"
+    )
+
+    @model_validator(mode="after")
+    def validate_model_state(self) -> Self:
+        has_training_time = self.last_trained_at is not None
+        has_metrics = self.metrics is not None
+        state_is_consistent = (
+            self.is_trained and has_training_time and has_metrics
+        ) or (
+            not self.is_trained and not has_training_time and not has_metrics
+        )
+        if not state_is_consistent:
+            raise ValueError(
+                "Model training time and metrics must match its trained state"
+            )
+        return self

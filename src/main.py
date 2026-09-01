@@ -25,6 +25,7 @@ from .schemas import (
     DatasetRowChurn,
     DatasetSplitInfo,
     FeatureVectorChurn,
+    ModelStatus,
     ModelTrainingInfo,
 )
 
@@ -171,4 +172,25 @@ def train_model(
     return ModelTrainingInfo(
         accuracy=accuracy,
         f1=f1,
+    )
+
+
+@app.get("/model/status", response_model=ModelStatus)
+def get_model_status(request: Request) -> ModelStatus:
+    artifact = getattr(request.app.state, "churn_model", None)
+    if artifact is None:
+        return ModelStatus(
+            is_trained=False,
+            last_trained_at=None,
+            metrics=None,
+        )
+
+    artifact = cast(ChurnModelArtifact, artifact)
+    return ModelStatus(
+        is_trained=True,
+        last_trained_at=artifact.trained_at,
+        metrics=ModelTrainingInfo(
+            accuracy=artifact.accuracy,
+            f1=artifact.f1,
+        ),
     )

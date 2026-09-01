@@ -25,11 +25,15 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
 
     in_memory_artifact = main.app.state.churn_model
     persisted_artifact = load_churn_model(model_path)
+    ready_status = main.get_model_status(request)
     sample = dataset.dataframe.drop(columns="churn").iloc[[0]]
     assert isinstance(in_memory_artifact, ChurnModelArtifact)
     assert in_memory_artifact.trained_at.utcoffset() is not None
     assert persisted_artifact.accuracy == metrics.accuracy
     assert persisted_artifact.f1 == metrics.f1
+    assert ready_status.is_trained is True
+    assert ready_status.last_trained_at == persisted_artifact.trained_at
+    assert ready_status.metrics == metrics
 
     monkeypatch.setattr(main, "DATASET_PATH", tmp_path / "missing.csv")
     main.app.state.churn_model = None
@@ -42,3 +46,20 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
         assert restored_artifact.pipeline.predict(sample).tolist() == (
             persisted_artifact.pipeline.predict(sample).tolist()
         )
+        restored_status = main.get_model_status(request)
+        assert restored_status.is_trained is True
+        assert restored_status.last_trained_at == persisted_artifact.trained_at
+        assert restored_status.metrics == metrics
+
+
+def test_model_status_reports_untrained_state() -> None:
+    main.app.state.churn_model = None
+    request = cast(Request, SimpleNamespace(app=main.app))
+
+    status = main.get_model_status(request)
+
+    assert status.model_dump() == {
+        "is_trained": False,
+        "last_trained_at": None,
+        "metrics": None,
+    }

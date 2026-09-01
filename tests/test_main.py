@@ -202,6 +202,33 @@ async def test_model_train_persists_model_and_lifespan_restores_it(
         assert restored_from_lifespan.f1 == pytest.approx(response.json()["f1"])
 
 
+async def test_model_status_reports_untrained_model(
+    client: httpx2.AsyncClient,
+) -> None:
+    response = await client.get("/model/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "is_trained": False,
+        "last_trained_at": None,
+        "metrics": None,
+    }
+
+
+async def test_model_status_reports_latest_training(
+    client: httpx2.AsyncClient,
+) -> None:
+    training_response = await client.post("/model/train")
+    status_response = await client.get("/model/status")
+
+    assert training_response.status_code == 200
+    assert status_response.status_code == 200
+    payload = status_response.json()
+    assert payload["is_trained"] is True
+    assert payload["last_trained_at"].endswith("Z")
+    assert payload["metrics"] == training_response.json()
+
+
 async def test_model_train_returns_503_when_dataset_is_unavailable(
     client: httpx2.AsyncClient,
 ) -> None:

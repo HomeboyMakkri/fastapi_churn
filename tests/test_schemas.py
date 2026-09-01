@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -7,6 +8,7 @@ from src.schemas import (
     DatasetRowChurn,
     DatasetSplitInfo,
     FeatureVectorChurn,
+    ModelStatus,
     ModelTrainingInfo,
 )
 
@@ -131,3 +133,52 @@ def test_model_training_info_rejects_metrics_outside_unit_interval(
 
     with pytest.raises(ValidationError):
         ModelTrainingInfo.model_validate(payload)
+
+
+def test_model_status_accepts_untrained_state() -> None:
+    model_status = ModelStatus(
+        is_trained=False,
+        last_trained_at=None,
+        metrics=None,
+    )
+
+    assert model_status.model_dump() == {
+        "is_trained": False,
+        "last_trained_at": None,
+        "metrics": None,
+    }
+
+
+def test_model_status_accepts_trained_state() -> None:
+    trained_at = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+
+    model_status = ModelStatus(
+        is_trained=True,
+        last_trained_at=trained_at,
+        metrics=ModelTrainingInfo(accuracy=0.8, f1=0.5),
+    )
+
+    assert model_status.last_trained_at == trained_at
+    assert model_status.metrics == ModelTrainingInfo(accuracy=0.8, f1=0.5)
+
+
+@pytest.mark.parametrize(
+    ("is_trained", "last_trained_at", "metrics"),
+    [
+        (True, None, None),
+        (True, datetime(2026, 9, 2, tzinfo=timezone.utc), None),
+        (False, datetime(2026, 9, 2, tzinfo=timezone.utc), None),
+        (False, None, {"accuracy": 0.8, "f1": 0.5}),
+    ],
+)
+def test_model_status_rejects_inconsistent_state(
+    is_trained: bool,
+    last_trained_at: datetime | None,
+    metrics: dict[str, float] | None,
+) -> None:
+    with pytest.raises(ValidationError, match="training time and metrics"):
+        ModelStatus(
+            is_trained=is_trained,
+            last_trained_at=last_trained_at,
+            metrics=metrics,  # type: ignore[arg-type]
+        )
