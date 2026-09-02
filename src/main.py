@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.openapi.models import Example
 from sklearn.metrics import accuracy_score, f1_score
 
 from .dataset import ChurnDataset
@@ -15,6 +16,7 @@ from .model_store import (
     load_churn_model,
     save_churn_model,
 )
+from .prediction import predict_churn_batch
 from .preprocessing import (
     get_class_distribution,
     get_class_percentage,
@@ -27,12 +29,82 @@ from .schemas import (
     FeatureVectorChurn,
     ModelStatus,
     ModelTrainingInfo,
+    PredictionPayload,
+    PredictionResponseChurn,
+    PredictionResult,
 )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
 MODEL_PATH = PROJECT_ROOT / "models" / "churn_model.joblib"
+
+PREDICTION_REQUEST_EXAMPLES: dict[str, Example] = {
+    "single_customer": {
+        "summary": "One customer",
+        "value": {
+            "monthly_fee": 79.99,
+            "usage_hours": 8.5,
+            "support_requests": 4,
+            "account_age_months": 6,
+            "failed_payments": 2,
+            "region": "europe",
+            "device_type": "mobile",
+            "payment_method": "card",
+            "autopay_enabled": 0,
+        },
+    },
+    "customer_batch": {
+        "summary": "Several customers",
+        "value": [
+            {
+                "monthly_fee": 29.99,
+                "usage_hours": 45.0,
+                "support_requests": 0,
+                "account_age_months": 36,
+                "failed_payments": 0,
+                "region": "europe",
+                "device_type": "desktop",
+                "payment_method": "card",
+                "autopay_enabled": 1,
+            },
+            {
+                "monthly_fee": 99.99,
+                "usage_hours": 4.0,
+                "support_requests": 6,
+                "account_age_months": 2,
+                "failed_payments": 3,
+                "region": "america",
+                "device_type": "mobile",
+                "payment_method": "paypal",
+                "autopay_enabled": 0,
+            },
+        ],
+    },
+}
+
+PREDICTION_RESPONSE_EXAMPLES = {
+    "single_customer": {
+        "summary": "Prediction for one customer",
+        "value": {
+            "predicted_class": 1,
+            "class_probabilities": {"0": 0.23, "1": 0.77},
+        },
+    },
+    "customer_batch": {
+        "summary": "Predictions in request order",
+        "value": [
+            {
+                "predicted_class": 0,
+                "class_probabilities": {"0": 0.84, "1": 0.16},
+            },
+            {
+                "predicted_class": 1,
+                "class_probabilities": {"0": 0.31, "1": 0.69},
+            },
+        ],
+    },
+}
 
 
 @asynccontextmanager
@@ -76,6 +148,20 @@ def get_dataset(request: Request) -> ChurnDataset:
 
 
 DatasetDependency = Annotated[ChurnDataset, Depends(get_dataset)]
+
+
+def get_churn_model(request: Request) -> ChurnModelArtifact:
+    artifact = getattr(request.app.state, "churn_model", None)
+    if artifact is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Churn model is not trained",
+        )
+
+    return cast(ChurnModelArtifact, artifact)
+
+
+ModelDependency = Annotated[ChurnModelArtifact, Depends(get_churn_model)]
 PreviewCount = Annotated[
     int,
     Query(ge=1, le=100, description="Number of rows to preview"),
@@ -87,11 +173,45 @@ def read_root():
     return {"message": "ml churn server is running"}
 
 
-@app.post("/predict", response_model=FeatureVectorChurn)
+PredictionRequest = Annotated[
+    PredictionPayload,
+    Body(openapi_examples=PREDICTION_REQUEST_EXAMPLES),
+]
+
+
+@app.post(
+    "/predict",
+    response_model=PredictionResult,
+    summary="Predict customer churn",
+    description=(
+        "Accepts one customer or a non-empty list of customers. "
+        "Batch predictions are returned in the same order as the request."
+    ),
+    responses={
+        200: {
+            "description": "Churn class and probabilities for each customer",
+            "content": {
+                "application/json": {
+                    "examples": PREDICTION_RESPONSE_EXAMPLES,
+                }
+            },
+        },
+        503: {
+            "description": "A trained churn model is not available",
+        },
+    },
+)
 def predict_churn(
-    feature_vector: FeatureVectorChurn,
-) -> FeatureVectorChurn:
-    return feature_vector
+    payload: PredictionRequest,
+    artifact: ModelDependency,
+) -> PredictionResult:
+    is_single_customer = isinstance(payload, FeatureVectorChurn)
+    feature_vectors = [payload] if is_single_customer else payload
+    predictions = predict_churn_batch(artifact, feature_vectors)
+
+    if is_single_customer:
+        return predictions[0]
+    return predictions
 
 
 @app.get("/dataset/preview", response_model=list[DatasetRowChurn])

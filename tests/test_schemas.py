@@ -10,6 +10,7 @@ from src.schemas import (
     FeatureVectorChurn,
     ModelStatus,
     ModelTrainingInfo,
+    PredictionResponseChurn,
 )
 
 
@@ -64,6 +65,38 @@ def test_feature_vector_rejects_unknown_fields(
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         FeatureVectorChurn.model_validate(feature_data)
+
+
+def test_prediction_response_accepts_binary_probabilities() -> None:
+    response = PredictionResponseChurn(
+        predicted_class=1,
+        class_probabilities={"0": 0.25, "1": 0.75},
+    )
+
+    assert response.model_dump() == {
+        "predicted_class": 1,
+        "class_probabilities": {"0": 0.25, "1": 0.75},
+    }
+
+
+@pytest.mark.parametrize(
+    ("probabilities", "message"),
+    [
+        ({"0": 1.0}, "classes 0 and 1"),
+        ({"0": 0.7, "1": 0.4}, "sum to 1"),
+        ({"0": -0.1, "1": 1.1}, "greater than or equal to 0"),
+        ({"0": float("nan"), "1": 1.0}, "finite number"),
+    ],
+)
+def test_prediction_response_rejects_invalid_probabilities(
+    probabilities: dict[str, float],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        PredictionResponseChurn(
+            predicted_class=1,
+            class_probabilities=probabilities,  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize("churn", [-1, 2])

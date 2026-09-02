@@ -2,8 +2,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import numpy as np
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from src import main
 from src.dataset import ChurnDataset
@@ -43,9 +44,15 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
         assert main.app.state.churn_dataset is None
         assert isinstance(restored_artifact, ChurnModelArtifact)
         assert restored_artifact.trained_at == persisted_artifact.trained_at
-        assert restored_artifact.pipeline.predict(sample).tolist() == (
-            persisted_artifact.pipeline.predict(sample).tolist()
+        restored_predictions = cast(
+            np.ndarray,
+            restored_artifact.pipeline.predict(sample),
         )
+        persisted_predictions = cast(
+            np.ndarray,
+            persisted_artifact.pipeline.predict(sample),
+        )
+        assert restored_predictions.tolist() == persisted_predictions.tolist()
         restored_status = main.get_model_status(request)
         assert restored_status.is_trained is True
         assert restored_status.last_trained_at == persisted_artifact.trained_at
@@ -63,3 +70,30 @@ def test_model_status_reports_untrained_state() -> None:
         "last_trained_at": None,
         "metrics": None,
     }
+
+
+def test_get_churn_model_returns_available_artifact() -> None:
+    artifact = cast(ChurnModelArtifact, object())
+    request = cast(
+        Request,
+        SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(churn_model=artifact))
+        ),
+    )
+
+    assert main.get_churn_model(request) is artifact
+
+
+def test_get_churn_model_returns_503_when_model_is_unavailable() -> None:
+    request = cast(
+        Request,
+        SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(churn_model=None))
+        ),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        main.get_churn_model(request)
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail == "Churn model is not trained"

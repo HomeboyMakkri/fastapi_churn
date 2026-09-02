@@ -1,7 +1,14 @@
 from datetime import datetime
-from typing import Literal, Self
+from math import isclose
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+ChurnClass = Literal[0, 1]
+ChurnClassLabel = Literal["0", "1"]
+ClassProbabilities = dict[ChurnClassLabel, Probability]
 
 
 class FeatureVectorChurn(BaseModel):
@@ -34,6 +41,37 @@ class FeatureVectorChurn(BaseModel):
     autopay_enabled: Literal[0, 1] = Field(
         ..., description="Whether autopay is enabled for the customer"
     )
+
+
+FeatureVectorBatch = Annotated[list[FeatureVectorChurn], Field(min_length=1)]
+PredictionPayload = FeatureVectorChurn | FeatureVectorBatch
+
+
+class PredictionResponseChurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    predicted_class: ChurnClass = Field(
+        ..., description="Predicted churn class: 0 or 1"
+    )
+    class_probabilities: ClassProbabilities = Field(
+        ..., description="Probability assigned to each churn class"
+    )
+
+    @model_validator(mode="after")
+    def validate_class_probabilities(self) -> Self:
+        if set(self.class_probabilities) != {"0", "1"}:
+            raise ValueError("Probabilities must be provided for classes 0 and 1")
+        if not isclose(
+            sum(self.class_probabilities.values()),
+            1.0,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("Class probabilities must sum to 1")
+        return self
+
+
+PredictionResult = PredictionResponseChurn | list[PredictionResponseChurn]
 
 
 class DatasetRowChurn(FeatureVectorChurn):

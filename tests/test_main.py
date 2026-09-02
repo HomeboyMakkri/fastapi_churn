@@ -49,7 +49,55 @@ async def test_root_reports_running_service(client: httpx2.AsyncClient) -> None:
     assert response.json() == {"message": "ml churn server is running"}
 
 
-async def test_predict_echoes_valid_feature_vector(
+async def test_predict_returns_class_and_probabilities_for_one_customer(
+    client: httpx2.AsyncClient,
+    valid_record: dict[str, object],
+    trained_artifact: ChurnModelArtifact,
+) -> None:
+    valid_record.pop("churn")
+    app.state.churn_model = trained_artifact
+
+    response = await client.post("/predict", json=valid_record)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["predicted_class"] in {0, 1}
+    assert set(payload["class_probabilities"]) == {"0", "1"}
+    assert sum(payload["class_probabilities"].values()) == pytest.approx(1.0)
+
+
+async def test_predict_returns_batch_in_request_order(
+    client: httpx2.AsyncClient,
+    valid_record: dict[str, object],
+    trained_artifact: ChurnModelArtifact,
+) -> None:
+    valid_record.pop("churn")
+    second_record = {**valid_record, "monthly_fee": 99.99}
+    app.state.churn_model = trained_artifact
+
+    batch_response = await client.post(
+        "/predict",
+        json=[valid_record, second_record],
+    )
+    first_response = await client.post("/predict", json=valid_record)
+    second_response = await client.post("/predict", json=second_record)
+
+    assert batch_response.status_code == 200
+    assert batch_response.json() == [first_response.json(), second_response.json()]
+
+
+async def test_predict_rejects_empty_batch(
+    client: httpx2.AsyncClient,
+    trained_artifact: ChurnModelArtifact,
+) -> None:
+    app.state.churn_model = trained_artifact
+
+    response = await client.post("/predict", json=[])
+
+    assert response.status_code == 422
+
+
+async def test_predict_returns_503_when_model_is_unavailable(
     client: httpx2.AsyncClient,
     valid_record: dict[str, object],
 ) -> None:
@@ -57,8 +105,8 @@ async def test_predict_echoes_valid_feature_vector(
 
     response = await client.post("/predict", json=valid_record)
 
-    assert response.status_code == 200
-    assert response.json() == valid_record
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Churn model is not trained"}
 
 
 @pytest.mark.parametrize(
@@ -73,8 +121,10 @@ async def test_predict_rejects_invalid_payload(
     client: httpx2.AsyncClient,
     valid_record: dict[str, object],
     payload_change: tuple[str, str, object],
+    trained_artifact: ChurnModelArtifact,
 ) -> None:
     valid_record.pop("churn")
+    app.state.churn_model = trained_artifact
     operation, field, value = payload_change
 
     if operation == "remove":
