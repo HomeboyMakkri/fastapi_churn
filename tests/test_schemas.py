@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from itertools import product
 from typing import Any
 
 import pytest
@@ -227,45 +228,90 @@ def test_model_status_accepts_untrained_state() -> None:
         is_trained=False,
         last_trained_at=None,
         metrics=None,
+        model_type=None,
+        hyperparameters=None,
     )
 
     assert model_status.model_dump() == {
         "is_trained": False,
         "last_trained_at": None,
         "metrics": None,
+        "model_type": None,
+        "hyperparameters": None,
     }
 
 
-def test_model_status_accepts_trained_state() -> None:
+@pytest.mark.parametrize(
+    ("model_type", "hyperparameters"),
+    [
+        ("logreg", {}),
+        (
+            "random_forest",
+            {"n_estimators": 50, "max_depth": 4, "random_state": 7},
+        ),
+    ],
+)
+def test_model_status_accepts_trained_state(
+    model_type: str,
+    hyperparameters: dict[str, object],
+) -> None:
     trained_at = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
-    model_status = ModelStatus(
-        is_trained=True,
-        last_trained_at=trained_at,
-        metrics=ModelTrainingInfo(accuracy=0.8, f1=0.5),
+    model_status = ModelStatus.model_validate(
+        {
+            "is_trained": True,
+            "last_trained_at": trained_at,
+            "metrics": {"accuracy": 0.8, "f1": 0.5},
+            "model_type": model_type,
+            "hyperparameters": hyperparameters,
+        }
     )
 
     assert model_status.last_trained_at == trained_at
     assert model_status.metrics == ModelTrainingInfo(accuracy=0.8, f1=0.5)
+    assert model_status.model_type == model_type
+    assert model_status.hyperparameters == hyperparameters
 
 
 @pytest.mark.parametrize(
-    ("is_trained", "last_trained_at", "metrics"),
+    (
+        "is_trained",
+        "has_training_time",
+        "has_metrics",
+        "has_model_type",
+        "has_hyperparameters",
+    ),
     [
-        (True, None, None),
-        (True, datetime(2026, 9, 2, tzinfo=timezone.utc), None),
-        (False, datetime(2026, 9, 2, tzinfo=timezone.utc), None),
-        (False, None, {"accuracy": 0.8, "f1": 0.5}),
+        (is_trained, *metadata_presence)
+        for is_trained in (False, True)
+        for metadata_presence in product((False, True), repeat=4)
+        if (is_trained, metadata_presence)
+        not in {
+            (False, (False, False, False, False)),
+            (True, (True, True, True, True)),
+        }
     ],
 )
 def test_model_status_rejects_inconsistent_state(
     is_trained: bool,
-    last_trained_at: datetime | None,
-    metrics: dict[str, float] | None,
+    has_training_time: bool,
+    has_metrics: bool,
+    has_model_type: bool,
+    has_hyperparameters: bool,
 ) -> None:
-    with pytest.raises(ValidationError, match="training time and metrics"):
+    with pytest.raises(ValidationError, match="metadata must match"):
         ModelStatus(
             is_trained=is_trained,
-            last_trained_at=last_trained_at,
-            metrics=metrics,  # type: ignore[arg-type]
+            last_trained_at=(
+                datetime(2026, 9, 2, tzinfo=timezone.utc)
+                if has_training_time
+                else None
+            ),
+            metrics=(
+                ModelTrainingInfo(accuracy=0.8, f1=0.5)
+                if has_metrics
+                else None
+            ),
+            model_type="logreg" if has_model_type else None,
+            hyperparameters={} if has_hyperparameters else None,
         )

@@ -319,6 +319,8 @@ def get_model_status(request: Request) -> ModelStatus:
             is_trained=False,
             last_trained_at=None,
             metrics=None,
+            model_type=None,
+            hyperparameters=None,
         )
 
     artifact = cast(ChurnModelArtifact, artifact)
@@ -329,4 +331,6 @@ def get_model_status(request: Request) -> ModelStatus:
             accuracy=artifact.accuracy,
             f1=artifact.f1,
         ),
+        model_type=artifact.model_type,
+        hyperparameters=artifact.hyperparameters,
     )

@@ -49,6 +49,8 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
     assert ready_status.is_trained is True
     assert ready_status.last_trained_at == persisted_artifact.trained_at
     assert ready_status.metrics == metrics
+    assert ready_status.model_type == config.model_type
+    assert ready_status.hyperparameters == config.hyperparameters
 
     monkeypatch.setattr(main, "DATASET_PATH", tmp_path / "missing.csv")
     main.app.state.churn_model = None
@@ -73,6 +75,8 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
         assert restored_status.is_trained is True
         assert restored_status.last_trained_at == persisted_artifact.trained_at
         assert restored_status.metrics == metrics
+        assert restored_status.model_type == config.model_type
+        assert restored_status.hyperparameters == config.hyperparameters
 
 
 def test_training_does_not_publish_model_when_persistence_fails(
@@ -131,6 +135,9 @@ def test_training_creates_and_persists_random_forest(
     assert classifier.random_state == 7
     assert persisted_artifact.model_type == artifact.model_type
     assert persisted_artifact.hyperparameters == artifact.hyperparameters
+    status = main.get_model_status(request)
+    assert status.model_type == "random_forest"
+    assert status.hyperparameters == config.hyperparameters
 
 
 @pytest.mark.parametrize(
@@ -170,6 +177,8 @@ def test_model_status_reports_untrained_state() -> None:
         "is_trained": False,
         "last_trained_at": None,
         "metrics": None,
+        "model_type": None,
+        "hyperparameters": None,
     }
 
 

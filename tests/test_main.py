@@ -356,6 +356,8 @@ async def test_model_status_reports_untrained_model(
         "is_trained": False,
         "last_trained_at": None,
         "metrics": None,
+        "model_type": None,
+        "hyperparameters": None,
     }
 
 
@@ -374,6 +376,8 @@ async def test_model_status_reports_latest_training(
     assert payload["is_trained"] is True
     assert payload["last_trained_at"].endswith("Z")
     assert payload["metrics"] == training_response.json()
+    assert payload["model_type"] == "logreg"
+    assert payload["hyperparameters"] == {}
 
 
 async def test_model_train_returns_503_when_dataset_is_unavailable(

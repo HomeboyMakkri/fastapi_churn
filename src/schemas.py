@@ -160,18 +160,28 @@ class ModelStatus(BaseModel):
     metrics: ModelTrainingInfo | None = Field(
         ..., description="Metrics calculated on the test dataset"
     )
+    model_type: ModelType | None = Field(
+        ..., description="Type of the trained churn classifier"
+    )
+    hyperparameters: Hyperparameters | None = Field(
+        ..., description="Hyperparameters requested for the trained classifier"
+    )
 
     @model_validator(mode="after")
     def validate_model_state(self) -> Self:
-        has_training_time = self.last_trained_at is not None
-        has_metrics = self.metrics is not None
-        state_is_consistent = (
-            self.is_trained and has_training_time and has_metrics
-        ) or (
-            not self.is_trained and not has_training_time and not has_metrics
+        metadata = (
+            self.last_trained_at,
+            self.metrics,
+            self.model_type,
+            self.hyperparameters,
         )
+        has_all_metadata = all(value is not None for value in metadata)
+        has_no_metadata = all(value is None for value in metadata)
+        state_is_consistent = (
+            self.is_trained and has_all_metadata
+        ) or (not self.is_trained and has_no_metadata)
         if not state_is_consistent:
             raise ValueError(
-                "Model training time and metrics must match its trained state"
+                "Model metadata must match its trained state"
             )
         return self
