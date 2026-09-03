@@ -9,7 +9,7 @@ from fastapi.openapi.models import Example
 from sklearn.metrics import accuracy_score, f1_score
 
 from .dataset import ChurnDataset
-from .model import train_churn_model
+from .model import ModelConfigurationError, train_churn_model
 from .model_store import (
     ChurnModelArtifact,
     ModelPersistenceError,
@@ -32,6 +32,7 @@ from .schemas import (
     PredictionPayload,
     PredictionResponseChurn,
     PredictionResult,
+    TrainingConfigChurn,
 )
 
 
@@ -257,6 +258,7 @@ def get_dataset_split_info(
 @app.post("/model/train", response_model=ModelTrainingInfo)
 def train_model(
     request: Request,
+    config: TrainingConfigChurn,
     dataset: DatasetDependency,
 ) -> ModelTrainingInfo:
     try:
@@ -274,7 +276,19 @@ def train_model(
         )
 
     X_train, X_test, y_train, y_test = prepare_and_split(dataframe)
-    pipeline = train_churn_model(X_train, y_train)
+    try:
+        pipeline = train_churn_model(
+            X_train,
+            y_train,
+            model_type=config.model_type,
+            hyperparameters=config.hyperparameters,
+        )
+    except ModelConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
     predictions = pipeline.predict(X_test)
     accuracy = float(accuracy_score(y_test, predictions))
     f1 = float(f1_score(y_test, predictions))
@@ -284,6 +298,8 @@ def train_model(
         trained_at=datetime.now(timezone.utc),
         accuracy=accuracy,
         f1=f1,
+        model_type=config.model_type,
+        hyperparameters=config.hyperparameters,
     )
 
     save_churn_model(artifact, MODEL_PATH)

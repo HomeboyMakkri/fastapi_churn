@@ -210,7 +210,10 @@ async def test_dataset_split_info_matches_stratified_split(
 async def test_model_train_returns_test_metrics(
     client: httpx2.AsyncClient,
 ) -> None:
-    response = await client.post("/model/train")
+    response = await client.post(
+        "/model/train",
+        json={"model_type": "logreg", "hyperparameters": {}},
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -218,6 +221,81 @@ async def test_model_train_returns_test_metrics(
         "accuracy": pytest.approx(0.7875),
         "f1": pytest.approx(0.0449438202247191),
     }
+
+
+@pytest.mark.parametrize(
+    ("config", "expected_classifier_parameters"),
+    [
+        (
+            {
+                "model_type": "logreg",
+                "hyperparameters": {"C": 0.5, "max_iter": 250},
+            },
+            {"C": 0.5, "max_iter": 250},
+        ),
+        (
+            {
+                "model_type": "random_forest",
+                "hyperparameters": {
+                    "n_estimators": 10,
+                    "max_depth": 3,
+                    "random_state": 7,
+                },
+            },
+            {"n_estimators": 10, "max_depth": 3, "random_state": 7},
+        ),
+    ],
+)
+async def test_model_train_applies_and_stores_configuration(
+    client: httpx2.AsyncClient,
+    config: dict[str, object],
+    expected_classifier_parameters: dict[str, object],
+) -> None:
+    response = await client.post("/model/train", json=config)
+
+    assert response.status_code == 200
+    artifact = app.state.churn_model
+    assert isinstance(artifact, ChurnModelArtifact)
+    assert artifact.model_type == config["model_type"]
+    assert artifact.hyperparameters == config["hyperparameters"]
+    classifier_parameters = artifact.pipeline.named_steps[
+        "classifier"
+    ].get_params(deep=False)
+    assert {
+        name: classifier_parameters[name]
+        for name in expected_classifier_parameters
+    } == expected_classifier_parameters
+
+
+async def test_model_train_rejects_unknown_model_type(
+    client: httpx2.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/model/train",
+        json={"model_type": "svm", "hyperparameters": {}},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "hyperparameters",
+    [
+        {"unknown_parameter": 1},
+        {"C": 0.0},
+    ],
+)
+async def test_model_train_rejects_invalid_hyperparameters(
+    client: httpx2.AsyncClient,
+    hyperparameters: dict[str, object],
+) -> None:
+    response = await client.post(
+        "/model/train",
+        json={"model_type": "logreg", "hyperparameters": hyperparameters},
+    )
+
+    assert response.status_code == 422
+    assert "hyperparameters" in response.json()["detail"]
 
 
 async def test_model_train_persists_model_and_lifespan_restores_it(
@@ -233,12 +311,23 @@ async def test_model_train_persists_model_and_lifespan_restores_it(
             transport=transport,
             base_url="http://testserver",
         ) as test_client:
-            response = await test_client.post("/model/train")
+            response = await test_client.post(
+                "/model/train",
+                json={
+                    "model_type": "random_forest",
+                    "hyperparameters": {"n_estimators": 10, "random_state": 7},
+                },
+            )
 
         in_memory_artifact = app.state.churn_model
         assert response.status_code == 200
         assert isinstance(in_memory_artifact, ChurnModelArtifact)
         assert in_memory_artifact.trained_at.utcoffset() is not None
+        assert in_memory_artifact.model_type == "random_forest"
+        assert in_memory_artifact.hyperparameters == {
+            "n_estimators": 10,
+            "random_state": 7,
+        }
 
     restored_from_disk = load_churn_model(model_path)
     async with lifespan(app):
@@ -250,6 +339,11 @@ async def test_model_train_persists_model_and_lifespan_restores_it(
             response.json()["accuracy"]
         )
         assert restored_from_lifespan.f1 == pytest.approx(response.json()["f1"])
+        assert restored_from_lifespan.model_type == "random_forest"
+        assert restored_from_lifespan.hyperparameters == {
+            "n_estimators": 10,
+            "random_state": 7,
+        }
 
 
 async def test_model_status_reports_untrained_model(
@@ -268,7 +362,10 @@ async def test_model_status_reports_untrained_model(
 async def test_model_status_reports_latest_training(
     client: httpx2.AsyncClient,
 ) -> None:
-    training_response = await client.post("/model/train")
+    training_response = await client.post(
+        "/model/train",
+        json={"model_type": "logreg", "hyperparameters": {}},
+    )
     status_response = await client.get("/model/status")
 
     assert training_response.status_code == 200
@@ -286,7 +383,10 @@ async def test_model_train_returns_503_when_dataset_is_unavailable(
     del app.state.churn_dataset
 
     try:
-        response = await client.post("/model/train")
+        response = await client.post(
+            "/model/train",
+            json={"model_type": "logreg", "hyperparameters": {}},
+        )
     finally:
         app.state.churn_dataset = dataset
 
@@ -321,7 +421,10 @@ async def test_model_train_returns_503_for_unusable_dataset(
     app.dependency_overrides[get_dataset] = lambda: stub
 
     try:
-        response = await client.post("/model/train")
+        response = await client.post(
+            "/model/train",
+            json={"model_type": "logreg", "hyperparameters": {}},
+        )
     finally:
         app.dependency_overrides.pop(get_dataset, None)
 
