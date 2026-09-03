@@ -4,13 +4,18 @@ import pandas as pd
 import numpy as np
 import pytest
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.utils.validation import check_is_fitted
 
-from src.model import train_churn_model
+from src.model import (
+    ModelConfigurationError,
+    create_churn_classifier,
+    train_churn_model,
+)
 from src.preprocessing import prepare_and_split
 
 
@@ -63,10 +68,20 @@ def make_learnable_dataframe(row_count: int = 200) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def test_train_churn_model_returns_fitted_expected_pipeline() -> None:
+@pytest.mark.parametrize(
+    ("model_type", "classifier_type"),
+    [
+        ("logreg", LogisticRegression),
+        ("random_forest", RandomForestClassifier),
+    ],
+)
+def test_train_churn_model_returns_fitted_expected_pipeline(
+    model_type: str,
+    classifier_type: type[LogisticRegression] | type[RandomForestClassifier],
+) -> None:
     X_train, _, y_train, _ = prepare_and_split(make_dataframe())
 
-    pipeline = train_churn_model(X_train, y_train)
+    pipeline = train_churn_model(X_train, y_train, model_type)
 
     assert isinstance(pipeline, Pipeline)
     check_is_fitted(pipeline)
@@ -77,16 +92,15 @@ def test_train_churn_model_returns_fitted_expected_pipeline() -> None:
     assert isinstance(preprocessor.named_transformers_["num"], StandardScaler)
     encoder = preprocessor.named_transformers_["cat"]
     assert isinstance(encoder, OneHotEncoder)
-    
-    encoder = preprocessor.named_transformers_['cat']
-    assert encoder.get_params()['handle_unknown'] == "ignore"
+    assert encoder.get_params()["handle_unknown"] == "ignore"
 
-    assert isinstance(pipeline.named_steps["classifier"], LogisticRegression)
+    assert isinstance(pipeline.named_steps["classifier"], classifier_type)
 
 
-def test_trained_model_predicts_classes_and_probabilities() -> None:
+@pytest.mark.parametrize("model_type", ["logreg", "random_forest"])
+def test_trained_model_predicts_classes_and_probabilities(model_type: str) -> None:
     X_train, X_test, y_train, _ = prepare_and_split(make_dataframe())
-    pipeline = train_churn_model(X_train, y_train)
+    pipeline = train_churn_model(X_train, y_train, model_type)
 
     predictions = pipeline.predict(X_test)
     probabilities = pipeline.predict_proba(X_test)
@@ -106,12 +120,69 @@ def test_pipeline_accepts_categories_unseen_during_training() -> None:
     unseen_customer.loc[:, "device_type"] = "tablet"
     unseen_customer.loc[:, "payment_method"] = "crypto"
 
-    prediction = pipeline.predict(unseen_customer)
-
     prediction = cast(np.ndarray, pipeline.predict(unseen_customer))
     assert prediction.shape == (1,)
-    
     assert prediction[0] in {0, 1}
+
+
+def test_classifier_uses_service_defaults() -> None:
+    logistic_regression = create_churn_classifier("logreg")
+    random_forest = create_churn_classifier("random_forest")
+
+    assert logistic_regression.max_iter == 1000
+    assert random_forest.random_state == 42
+
+
+@pytest.mark.parametrize(
+    ("model_type", "hyperparameters", "expected_parameters"),
+    [
+        ("logreg", {"max_iter": 250, "C": 0.5}, {"max_iter": 250, "C": 0.5}),
+        (
+            "random_forest",
+            {"random_state": 7, "n_estimators": 10, "max_depth": 3},
+            {"random_state": 7, "n_estimators": 10, "max_depth": 3},
+        ),
+    ],
+)
+def test_classifier_applies_hyperparameters(
+    model_type: str,
+    hyperparameters: dict[str, object],
+    expected_parameters: dict[str, object],
+) -> None:
+    classifier = create_churn_classifier(model_type, hyperparameters)
+
+    actual_parameters = classifier.get_params(deep=False)
+    assert {
+        name: actual_parameters[name] for name in expected_parameters
+    } == expected_parameters
+
+
+def test_classifier_rejects_unknown_model_type() -> None:
+    with pytest.raises(ModelConfigurationError, match="Unsupported model_type"):
+        create_churn_classifier("svm")
+
+
+def test_classifier_rejects_unknown_hyperparameter() -> None:
+    with pytest.raises(
+        ModelConfigurationError,
+        match="Unsupported hyperparameters for logreg: unknown_parameter",
+    ):
+        create_churn_classifier("logreg", {"unknown_parameter": 1})
+
+
+def test_training_rejects_invalid_hyperparameter_value() -> None:
+    X_train, _, y_train, _ = prepare_and_split(make_dataframe())
+
+    with pytest.raises(
+        ModelConfigurationError,
+        match="Invalid hyperparameters for random_forest",
+    ):
+        train_churn_model(
+            X_train,
+            y_train,
+            "random_forest",
+            {"n_estimators": 0},
+        )
 
 
 def test_training_does_not_modify_input_data() -> None:

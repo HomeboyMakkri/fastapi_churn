@@ -11,6 +11,7 @@ from src.schemas import (
     ModelStatus,
     ModelTrainingInfo,
     PredictionResponseChurn,
+    TrainingConfigChurn,
 )
 
 
@@ -140,6 +141,59 @@ def test_dataset_split_info_rejects_nonpositive_sizes(field: str) -> None:
 
     with pytest.raises(ValidationError):
         DatasetSplitInfo.model_validate(payload)
+
+
+@pytest.mark.parametrize("model_type", ["logreg", "random_forest"])
+def test_training_config_accepts_supported_model_types(model_type: str) -> None:
+    config = TrainingConfigChurn(model_type=model_type)  # type: ignore[arg-type]
+
+    assert config.model_type == model_type
+    assert config.hyperparameters == {}
+
+
+def test_training_config_accepts_scalar_hyperparameters() -> None:
+    hyperparameters = {
+        "solver": "liblinear",
+        "max_iter": 500,
+        "tolerance": 0.001,
+        "fit_intercept": True,
+        "class_weight": None,
+    }
+
+    config = TrainingConfigChurn(
+        model_type="logreg",
+        hyperparameters=hyperparameters,
+    )
+
+    assert config.hyperparameters == hyperparameters
+
+
+def test_training_config_rejects_unknown_model_type() -> None:
+    with pytest.raises(ValidationError):
+        TrainingConfigChurn(model_type="svm")  # type: ignore[arg-type]
+
+
+def test_training_config_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TrainingConfigChurn.model_validate(
+            {
+                "model_type": "logreg",
+                "unexpected": "value",
+            }
+        )
+
+
+@pytest.mark.parametrize("nested_value", [[100, 200], {"min_samples": 2}])
+def test_training_config_rejects_nested_hyperparameters(
+    nested_value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        TrainingConfigChurn.model_validate(
+            {
+                "model_type": "random_forest",
+                "hyperparameters": {"nested": nested_value},
+            }
+        )
 
 
 def test_model_training_info_accepts_valid_metrics() -> None:

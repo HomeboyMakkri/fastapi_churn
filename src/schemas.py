@@ -2,13 +2,16 @@ from datetime import datetime
 from math import isclose
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
 
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 ChurnClass = Literal[0, 1]
 ChurnClassLabel = Literal["0", "1"]
 ClassProbabilities = dict[ChurnClassLabel, Probability]
+ModelType = Literal["logreg", "random_forest"]
+HyperparameterValue = str | int | FiniteFloat | bool | None
+Hyperparameters = dict[str, HyperparameterValue]
 
 
 class FeatureVectorChurn(BaseModel):
@@ -119,6 +122,18 @@ class DatasetSplitInfo(BaseModel):
     )
     test_churn_percentage: dict[str, float] = Field(
         ..., description="Churn class percentages in the test set"
+    )
+
+
+class TrainingConfigChurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_type: ModelType = Field(
+        ..., description="Type of churn classifier to train"
+    )
+    hyperparameters: Hyperparameters = Field(
+        default_factory=dict,
+        description="Hyperparameters passed to the churn classifier",
     )
 
 

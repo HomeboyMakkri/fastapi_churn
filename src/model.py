@@ -1,7 +1,10 @@
-"""Build and train the baseline churn classification pipeline."""
+"""Build and train configurable churn classification pipelines."""
+
+from collections.abc import Mapping
 
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -9,12 +12,62 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from .preprocessing import CATEGORICAL_FEATURES, NUMERIC_FEATURES
 
 
+ChurnClassifier = LogisticRegression | RandomForestClassifier
+
+
+class ModelConfigurationError(ValueError):
+    """Raised when a churn classifier configuration is not supported."""
+
+
+def create_churn_classifier(
+    model_type: str,
+    hyperparameters: Mapping[str, object] | None = None,
+) -> ChurnClassifier:
+    """Create a supported classifier with service defaults and overrides."""
+    if model_type == "logreg":
+        classifier: ChurnClassifier = LogisticRegression(max_iter=1000)
+    elif model_type == "random_forest":
+        classifier = RandomForestClassifier(random_state=42)
+    else:
+        raise ModelConfigurationError(
+            f"Unsupported model_type: {model_type!r}. "
+            "Expected 'logreg' or 'random_forest'"
+        )
+
+    if hyperparameters is None:
+        parameters: dict[str, object] = {}
+    elif isinstance(hyperparameters, Mapping):
+        parameters = dict(hyperparameters)
+    else:
+        raise ModelConfigurationError("hyperparameters must be a mapping")
+
+    supported_parameters = classifier.get_params(deep=False)
+    unsupported_parameters = sorted(set(parameters) - set(supported_parameters))
+    if unsupported_parameters:
+        formatted_parameters = ", ".join(unsupported_parameters)
+        raise ModelConfigurationError(
+            f"Unsupported hyperparameters for {model_type}: {formatted_parameters}"
+        )
+
+    try:
+        classifier.set_params(**parameters)
+    except (TypeError, ValueError) as error:
+        raise ModelConfigurationError(
+            f"Invalid hyperparameters for {model_type}: {error}"
+        ) from error
+
+    return classifier
+
+
 def train_churn_model(
     X_train: pd.DataFrame,
     y_train: pd.Series,
+    model_type: str = "logreg",
+    hyperparameters: Mapping[str, object] | None = None,
 ) -> Pipeline:
-    """Fit and return a preprocessing and logistic-regression pipeline."""
+    """Fit and return a preprocessing and selected-classifier pipeline."""
     _validate_training_data(X_train, y_train)
+    classifier = create_churn_classifier(model_type, hyperparameters)
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -30,15 +83,19 @@ def train_churn_model(
     pipeline = Pipeline(
         steps=[
             ("preprocessing", preprocessor),
-            ("classifier", LogisticRegression(
-                max_iter=1000,
-                #class_weight='balanced',
-                #random_state=42,
-                )),
+            ("classifier", classifier),
         ]
     )
 
-    pipeline.fit(X_train, y_train)
+    try:
+        pipeline.fit(X_train, y_train)
+    except (TypeError, ValueError) as error:
+        if hyperparameters:
+            raise ModelConfigurationError(
+                f"Invalid hyperparameters for {model_type}: {error}"
+            ) from error
+        raise
+
     return pipeline
 
 

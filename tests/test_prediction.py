@@ -44,6 +44,8 @@ def make_artifact() -> ChurnModelArtifact:
         trained_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
         accuracy=0.8,
         f1=0.7,
+        model_type="logreg",
+        hyperparameters={},
     )
 
 
