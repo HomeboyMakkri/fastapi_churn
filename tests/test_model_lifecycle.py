@@ -14,7 +14,89 @@ from src.model_store import (
     ModelPersistenceError,
     load_churn_model,
 )
-from src.schemas import TrainingConfigChurn
+from src.schemas import (
+    FeatureVectorChurn,
+    PredictionResponseChurn,
+    TrainingConfigChurn,
+)
+
+
+def test_training_config_is_exposed_in_openapi() -> None:
+    openapi = main.app.openapi()
+    operation = openapi["paths"]["/model/train"]["post"]
+    request_body = operation["requestBody"]
+    request_schema = request_body["content"]["application/json"]["schema"]
+    config_schema = openapi["components"]["schemas"]["TrainingConfigChurn"]
+
+    assert request_body["required"] is True
+    assert request_schema == {
+        "$ref": "#/components/schemas/TrainingConfigChurn"
+    }
+    assert config_schema["additionalProperties"] is False
+    assert config_schema["required"] == ["model_type"]
+    assert config_schema["properties"]["model_type"]["enum"] == [
+        "logreg",
+        "random_forest",
+    ]
+    hyperparameter_types = {
+        item["type"]
+        for item in config_schema["properties"]["hyperparameters"][
+            "additionalProperties"
+        ]["anyOf"]
+    }
+    assert hyperparameter_types == {
+        "string",
+        "integer",
+        "number",
+        "boolean",
+        "null",
+    }
+
+
+@pytest.mark.parametrize(
+    "config_payload",
+    [
+        {
+            "model_type": "logreg",
+            "hyperparameters": {"C": 0.75, "max_iter": 250},
+        },
+        {
+            "model_type": "random_forest",
+            "hyperparameters": {"n_estimators": 10, "random_state": 7},
+        },
+    ],
+)
+def test_trained_and_restored_models_support_predict_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    valid_record: dict[str, object],
+    config_payload: dict[str, object],
+) -> None:
+    model_path = tmp_path / "churn_model.joblib"
+    monkeypatch.setattr(main, "MODEL_PATH", model_path)
+    dataset = ChurnDataset(main.DATASET_PATH)
+    dataset.load()
+    app_stub = SimpleNamespace(state=SimpleNamespace(churn_model=None))
+    request = cast(Request, SimpleNamespace(app=app_stub))
+    config = TrainingConfigChurn.model_validate(config_payload)
+    feature_vector = FeatureVectorChurn.model_validate(
+        {key: value for key, value in valid_record.items() if key != "churn"}
+    )
+
+    main.train_model(request=request, config=config, dataset=dataset)
+
+    trained_artifact = app_stub.state.churn_model
+    restored_artifact = load_churn_model(model_path)
+    trained_prediction = main.predict_churn(feature_vector, trained_artifact)
+    restored_prediction = main.predict_churn(feature_vector, restored_artifact)
+
+    assert isinstance(trained_prediction, PredictionResponseChurn)
+    assert isinstance(restored_prediction, PredictionResponseChurn)
+    assert trained_prediction == restored_prediction
+    assert trained_prediction.predicted_class in {0, 1}
+    assert sum(
+        trained_prediction.class_probabilities.values()
+    ) == pytest.approx(1.0)
 
 
 @pytest.mark.anyio
@@ -180,6 +262,21 @@ def test_model_status_reports_untrained_state() -> None:
         "model_type": None,
         "hyperparameters": None,
     }
+
+
+def test_get_dataset_returns_503_when_dataset_is_unavailable() -> None:
+    request = cast(
+        Request,
+        SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(churn_dataset=None))
+        ),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        main.get_dataset(request)
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail == "Churn dataset is not available"
 
 
 def test_get_churn_model_returns_available_artifact() -> None:
