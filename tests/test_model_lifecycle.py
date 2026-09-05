@@ -12,6 +12,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from src import main
 from src.dataset import ChurnDataset
+from src.errors import ModelConfigurationApiError
 from src.model_store import (
     ChurnModelArtifact,
     ModelPersistenceError,
@@ -284,7 +285,10 @@ def test_training_converts_configuration_errors_to_422(
         main.train_model(request=request, config=config, dataset=dataset)
 
     assert raised.value.status_code == 422
-    assert "hyperparameters" in raised.value.detail
+    assert isinstance(raised.value, ModelConfigurationApiError)
+    assert raised.value.code == "model_configuration_error"
+    assert isinstance(raised.value.details, dict)
+    assert "hyperparameters" in raised.value.details["reason"]
     assert app_stub.state.churn_model is None
 
 

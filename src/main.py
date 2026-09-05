@@ -1,15 +1,27 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Annotated, cast
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.models import Example
+from fastapi.responses import JSONResponse
 from sklearn.metrics import accuracy_score, f1_score
 
 from .dataset import ChurnDataset
 from .dataset_contract import CHURN_DATASET_CONTRACT
+from .errors import (
+    ApiHTTPException,
+    DataPreparationError,
+    DatasetEmptyError,
+    DatasetUnavailableError,
+    ModelConfigurationApiError,
+    ModelNotTrainedError,
+    PredictionError,
+)
 from .model import ModelConfigurationError, train_churn_model
 from .model_store import (
     ChurnModelArtifact,
@@ -27,6 +39,8 @@ from .schemas import (
     DatasetInfo,
     DatasetRowChurn,
     DatasetSplitInfo,
+    ErrorDetail,
+    ErrorResponse,
     FeatureGroup,
     FeatureVectorChurn,
     FeatureValueType,
@@ -40,6 +54,8 @@ from .schemas import (
     TrainingConfigChurn,
 )
 
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
@@ -112,6 +128,43 @@ PREDICTION_RESPONSE_EXAMPLES = {
     },
 }
 
+PREDICTION_VALIDATION_ERROR_EXAMPLE = {
+    "code": "request_validation_error",
+    "message": "Request data is invalid",
+    "details": [
+        {
+            "location": ["body", "monthly_fee"],
+            "message": "Field required",
+            "error_type": "missing",
+        }
+    ],
+}
+MODEL_NOT_TRAINED_ERROR_EXAMPLE = {
+    "code": "model_not_trained",
+    "message": "Churn model is not trained",
+    "details": None,
+}
+PREDICTION_FAILED_ERROR_EXAMPLE = {
+    "code": "prediction_failed",
+    "message": "Could not calculate churn prediction",
+    "details": None,
+}
+MODEL_CONFIGURATION_ERROR_EXAMPLE = {
+    "code": "model_configuration_error",
+    "message": "Model configuration is invalid",
+    "details": {"reason": "Unsupported hyperparameters for logreg: unknown"},
+}
+DATASET_EMPTY_ERROR_EXAMPLE = {
+    "code": "dataset_empty",
+    "message": "Churn dataset is empty",
+    "details": None,
+}
+INTERNAL_SERVER_ERROR_EXAMPLE = {
+    "code": "internal_server_error",
+    "message": "An unexpected server error occurred",
+    "details": None,
+}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -142,13 +195,89 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    _request: Request,
+    exception: RequestValidationError,
+) -> JSONResponse:
+    """Return Pydantic request errors using the service error contract."""
+    details = [
+        ErrorDetail(
+            location=list(error["loc"]),
+            message=error["msg"],
+            error_type=error["type"],
+        )
+        for error in exception.errors()
+    ]
+    payload = ErrorResponse(
+        code="request_validation_error",
+        message="Request data is invalid",
+        details=details,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content=payload.model_dump(mode="json"),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(
+    _request: Request,
+    exception: HTTPException,
+) -> JSONResponse:
+    """Normalize service and ordinary FastAPI HTTP exceptions."""
+    if isinstance(exception, ApiHTTPException):
+        code = exception.code
+        message = exception.message
+        details = exception.details
+    else:
+        code = f"http_{exception.status_code}"
+        message = (
+            exception.detail
+            if isinstance(exception.detail, str)
+            else "HTTP request failed"
+        )
+        details = (
+            None
+            if isinstance(exception.detail, str)
+            else {"detail": exception.detail}
+        )
+
+    payload = ErrorResponse(code=code, message=message, details=details)
+    return JSONResponse(
+        status_code=exception.status_code,
+        content=payload.model_dump(mode="json"),
+        headers=exception.headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(
+    request: Request,
+    exception: Exception,
+) -> JSONResponse:
+    """Hide implementation details while retaining the traceback in logs."""
+    logger.error(
+        "Unhandled error during %s %s",
+        request.method,
+        request.url.path,
+        exc_info=(type(exception), exception, exception.__traceback__),
+    )
+    payload = ErrorResponse(
+        code="internal_server_error",
+        message="An unexpected server error occurred",
+        details=None,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=payload.model_dump(mode="json"),
+    )
+
+
 def get_dataset(request: Request) -> ChurnDataset:
     dataset = getattr(request.app.state, "churn_dataset", None)
     if dataset is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Churn dataset is not available",
-        )
+        raise DatasetUnavailableError
 
     return cast(ChurnDataset, dataset)
 
@@ -159,10 +288,7 @@ DatasetDependency = Annotated[ChurnDataset, Depends(get_dataset)]
 def get_churn_model(request: Request) -> ChurnModelArtifact:
     artifact = getattr(request.app.state, "churn_model", None)
     if artifact is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Churn model is not trained",
-        )
+        raise ModelNotTrainedError
 
     return cast(ChurnModelArtifact, artifact)
 
@@ -243,7 +369,31 @@ PredictionRequest = Annotated[
             },
         },
         503: {
+            "model": ErrorResponse,
             "description": "A trained churn model is not available",
+            "content": {
+                "application/json": {
+                    "example": MODEL_NOT_TRAINED_ERROR_EXAMPLE,
+                }
+            },
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid feature set or value types",
+            "content": {
+                "application/json": {
+                    "example": PREDICTION_VALIDATION_ERROR_EXAMPLE,
+                }
+            },
+        },
+        500: {
+            "model": ErrorResponse,
+            "description": "The model could not calculate a prediction",
+            "content": {
+                "application/json": {
+                    "example": PREDICTION_FAILED_ERROR_EXAMPLE,
+                }
+            },
         },
     },
 )
@@ -253,7 +403,10 @@ def predict_churn(
 ) -> PredictionResult:
     is_single_customer = isinstance(payload, FeatureVectorChurn)
     feature_vectors = [payload] if is_single_customer else payload
-    predictions = predict_churn_batch(artifact, feature_vectors)
+    try:
+        predictions = predict_churn_batch(artifact, feature_vectors)
+    except Exception as error:
+        raise PredictionError from error
 
     if is_single_customer:
         return predictions[0]
@@ -300,7 +453,39 @@ def get_dataset_split_info(
     )
 
 
-@app.post("/model/train", response_model=ModelTrainingInfo)
+@app.post(
+    "/model/train",
+    response_model=ModelTrainingInfo,
+    responses={
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid training configuration or dataset",
+            "content": {
+                "application/json": {
+                    "example": MODEL_CONFIGURATION_ERROR_EXAMPLE,
+                }
+            },
+        },
+        503: {
+            "model": ErrorResponse,
+            "description": "The training dataset is unavailable or empty",
+            "content": {
+                "application/json": {
+                    "example": DATASET_EMPTY_ERROR_EXAMPLE,
+                }
+            },
+        },
+        500: {
+            "model": ErrorResponse,
+            "description": "Training or model persistence failed",
+            "content": {
+                "application/json": {
+                    "example": INTERNAL_SERVER_ERROR_EXAMPLE,
+                }
+            },
+        },
+    },
+)
 def train_model(
     request: Request,
     config: TrainingConfigChurn,
@@ -309,18 +494,15 @@ def train_model(
     try:
         dataframe = dataset.dataframe
     except RuntimeError as error:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Churn dataset is not loaded",
-        ) from error
+        raise DatasetUnavailableError("Churn dataset is not loaded") from error
 
     if dataframe.empty:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Churn dataset is empty",
-        )
+        raise DatasetEmptyError
 
-    X_train, X_test, y_train, y_test = prepare_and_split(dataframe)
+    try:
+        X_train, X_test, y_train, y_test = prepare_and_split(dataframe)
+    except (TypeError, ValueError) as error:
+        raise DataPreparationError(str(error)) from error
     try:
         pipeline = train_churn_model(
             X_train,
@@ -329,10 +511,7 @@ def train_model(
             hyperparameters=config.hyperparameters,
         )
     except ModelConfigurationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(error),
-        ) from error
+        raise ModelConfigurationApiError(str(error)) from error
 
     predictions = pipeline.predict(X_test)
     accuracy = float(accuracy_score(y_test, predictions))

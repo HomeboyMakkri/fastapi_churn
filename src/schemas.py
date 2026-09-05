@@ -16,8 +16,37 @@ FeatureValueType = Literal["number", "integer", "string"]
 FeatureGroup = Literal["numeric", "categorical"]
 
 
-class FeatureVectorChurn(BaseModel):
+class ErrorDetail(BaseModel):
+    """Describe one concrete problem in an API request."""
+
     model_config = ConfigDict(extra="forbid")
+
+    location: list[str | int] | None = Field(
+        default=None,
+        description="Location of the invalid value in the request",
+    )
+    message: str = Field(..., min_length=1, description="Problem description")
+    error_type: str | None = Field(
+        default=None,
+        description="Stable validation-error type",
+    )
+
+
+class ErrorResponse(BaseModel):
+    """Common response returned for every handled API error."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=1, description="Stable machine-readable code")
+    message: str = Field(..., min_length=1, description="Human-readable message")
+    details: list[ErrorDetail] | dict[str, object] | None = Field(
+        default=None,
+        description="Optional structured context about the error",
+    )
+
+
+class FeatureVectorChurn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     monthly_fee: float = Field(
         ..., ge=0, allow_inf_nan=False, description="Monthly fee of the customer"

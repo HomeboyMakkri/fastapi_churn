@@ -205,7 +205,11 @@ async def test_predict_returns_503_when_model_is_unavailable(
     response = await client.post("/predict", json=valid_record)
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Churn model is not trained"}
+    assert response.json() == {
+        "code": "model_not_trained",
+        "message": "Churn model is not trained",
+        "details": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -394,7 +398,9 @@ async def test_model_train_rejects_invalid_hyperparameters(
     )
 
     assert response.status_code == 422
-    assert "hyperparameters" in response.json()["detail"]
+    payload = response.json()
+    assert payload["code"] == "model_configuration_error"
+    assert "hyperparameters" in payload["details"]["reason"]
 
 
 async def test_model_train_persists_model_and_lifespan_restores_it(
@@ -494,7 +500,11 @@ async def test_model_train_returns_503_when_dataset_is_unavailable(
         app.state.churn_dataset = dataset
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Churn dataset is not available"}
+    assert response.json() == {
+        "code": "dataset_unavailable",
+        "message": "Churn dataset is not available",
+        "details": None,
+    }
 
 
 class DatasetStub:
@@ -509,16 +519,17 @@ class DatasetStub:
 
 
 @pytest.mark.parametrize(
-    ("dataframe", "detail"),
+    ("dataframe", "code", "message"),
     [
-        (None, "Churn dataset is not loaded"),
-        (pd.DataFrame(), "Churn dataset is empty"),
+        (None, "dataset_unavailable", "Churn dataset is not loaded"),
+        (pd.DataFrame(), "dataset_empty", "Churn dataset is empty"),
     ],
 )
 async def test_model_train_returns_503_for_unusable_dataset(
     client: httpx2.AsyncClient,
     dataframe: pd.DataFrame | None,
-    detail: str,
+    code: str,
+    message: str,
 ) -> None:
     stub = cast(ChurnDataset, DatasetStub(dataframe))
     app.dependency_overrides[get_dataset] = lambda: stub
@@ -532,4 +543,8 @@ async def test_model_train_returns_503_for_unusable_dataset(
         app.dependency_overrides.pop(get_dataset, None)
 
     assert response.status_code == 503
-    assert response.json() == {"detail": detail}
+    assert response.json() == {
+        "code": code,
+        "message": message,
+        "details": None,
+    }
