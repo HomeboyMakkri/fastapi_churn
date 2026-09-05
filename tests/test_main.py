@@ -9,6 +9,8 @@ import pytest
 from src.dataset import ChurnDataset
 from src.main import app, get_dataset, lifespan
 from src.model_store import ChurnModelArtifact, load_churn_model
+from src.preprocessing import CATEGORICAL_FEATURES, FEATURES, NUMERIC_FEATURES
+from src.schemas import FeatureVectorChurn
 
 
 pytestmark = pytest.mark.anyio
@@ -58,7 +60,8 @@ async def test_model_schema_is_available_without_dataset_or_model(
     response = await client.get("/model/schema")
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    assert payload == {
         "features": [
             {
                 "name": "monthly_fee",
@@ -107,6 +110,17 @@ async def test_model_schema_is_available_without_dataset_or_model(
             },
         ]
     }
+
+    feature_schema = FeatureVectorChurn.model_json_schema()["properties"]
+    assert [feature["name"] for feature in payload["features"]] == list(FEATURES)
+    for feature in payload["features"]:
+        feature_name = feature["name"]
+        expected_group = (
+            "numeric" if feature_name in NUMERIC_FEATURES else "categorical"
+        )
+        assert feature["group"] == expected_group
+        assert feature_name in NUMERIC_FEATURES + CATEGORICAL_FEATURES
+        assert feature["value_type"] == feature_schema[feature_name]["type"]
 
 
 async def test_model_schema_is_documented_in_openapi(

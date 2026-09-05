@@ -16,7 +16,11 @@ from src.model import (
     create_churn_classifier,
     train_churn_model,
 )
-from src.preprocessing import prepare_and_split
+from src.preprocessing import (
+    CATEGORICAL_FEATURES,
+    NUMERIC_FEATURES,
+    prepare_and_split,
+)
 
 
 def make_dataframe(
@@ -93,6 +97,15 @@ def test_train_churn_model_returns_fitted_expected_pipeline(
     encoder = preprocessor.named_transformers_["cat"]
     assert isinstance(encoder, OneHotEncoder)
     assert encoder.get_params()["handle_unknown"] == "ignore"
+    transformer_columns = {
+        name: tuple(columns)
+        for name, _, columns in preprocessor.transformers_
+        if name in {"num", "cat"}
+    }
+    assert transformer_columns == {
+        "num": NUMERIC_FEATURES,
+        "cat": CATEGORICAL_FEATURES,
+    }
 
     assert isinstance(pipeline.named_steps["classifier"], classifier_type)
 

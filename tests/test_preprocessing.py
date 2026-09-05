@@ -13,6 +13,7 @@ from src.preprocessing import (
     prepare_and_split,
     prepare_features_and_target,
 )
+from src.schemas import FeatureVectorChurn
 
 
 def make_dataframe(class_zero_rows: int = 8, class_one_rows: int = 4) -> pd.DataFrame:
@@ -39,8 +40,12 @@ def make_dataframe(class_zero_rows: int = 8, class_one_rows: int = 4) -> pd.Data
 
 def test_feature_groups_are_complete_unique_and_exclude_target() -> None:
     assert len(FEATURES) == 9
+    assert len(set(NUMERIC_FEATURES)) == len(NUMERIC_FEATURES)
+    assert len(set(CATEGORICAL_FEATURES)) == len(CATEGORICAL_FEATURES)
     assert len(set(FEATURES)) == len(FEATURES)
     assert set(NUMERIC_FEATURES).isdisjoint(CATEGORICAL_FEATURES)
+    assert FEATURES == NUMERIC_FEATURES + CATEGORICAL_FEATURES
+    assert set(FEATURES) == set(FeatureVectorChurn.model_fields)
     assert TARGET_COLUMN not in FEATURES
 
 

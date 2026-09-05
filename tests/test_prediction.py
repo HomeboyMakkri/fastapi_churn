@@ -84,7 +84,8 @@ def test_predict_churn_batch_passes_features_in_contract_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = make_artifact()
-    feature_vector = make_feature_vector(valid_record, monthly_fee=10.0)
+    reversed_record = dict(reversed(valid_record.items()))
+    feature_vector = make_feature_vector(reversed_record, monthly_fee=10.0)
     observed_columns: list[list[str]] = []
     original_predict = artifact.pipeline.predict
 

@@ -3,9 +3,12 @@ from types import SimpleNamespace
 from typing import cast
 
 import numpy as np
+import pandas as pd
 import pytest
 from fastapi import HTTPException, Request
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from src import main
 from src.dataset import ChurnDataset
@@ -14,6 +17,7 @@ from src.model_store import (
     ModelPersistenceError,
     load_churn_model,
 )
+from src.preprocessing import CATEGORICAL_FEATURES, FEATURES, NUMERIC_FEATURES
 from src.schemas import (
     FeatureVectorChurn,
     PredictionResponseChurn,
@@ -87,8 +91,43 @@ def test_trained_and_restored_models_support_predict_endpoint(
 
     trained_artifact = app_stub.state.churn_model
     restored_artifact = load_churn_model(model_path)
+    assert isinstance(trained_artifact, ChurnModelArtifact)
     trained_prediction = main.predict_churn(feature_vector, trained_artifact)
     restored_prediction = main.predict_churn(feature_vector, restored_artifact)
+
+    restored_pipeline = restored_artifact.pipeline
+    assert list(restored_pipeline.named_steps) == ["preprocessing", "classifier"]
+    restored_preprocessor = restored_pipeline.named_steps["preprocessing"]
+    assert isinstance(restored_preprocessor, ColumnTransformer)
+    assert isinstance(
+        restored_preprocessor.named_transformers_["num"],
+        StandardScaler,
+    )
+    restored_encoder = restored_preprocessor.named_transformers_["cat"]
+    assert isinstance(restored_encoder, OneHotEncoder)
+    assert restored_encoder.handle_unknown == "ignore"
+    transformer_columns = {
+        name: tuple(columns)
+        for name, _, columns in restored_preprocessor.transformers_
+        if name in {"num", "cat"}
+    }
+    assert transformer_columns == {
+        "num": NUMERIC_FEATURES,
+        "cat": CATEGORICAL_FEATURES,
+    }
+
+    inference_frame = pd.DataFrame.from_records(
+        [feature_vector.model_dump()],
+        columns=list(FEATURES),
+    )
+    np.testing.assert_array_equal(
+        trained_artifact.pipeline.predict(inference_frame),
+        restored_pipeline.predict(inference_frame),
+    )
+    np.testing.assert_allclose(
+        trained_artifact.pipeline.predict_proba(inference_frame),
+        restored_pipeline.predict_proba(inference_frame),
+    )
 
     assert isinstance(trained_prediction, PredictionResponseChurn)
     assert isinstance(restored_prediction, PredictionResponseChurn)
