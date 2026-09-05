@@ -49,6 +49,91 @@ async def test_root_reports_running_service(client: httpx2.AsyncClient) -> None:
     assert response.json() == {"message": "ml churn server is running"}
 
 
+async def test_model_schema_is_available_without_dataset_or_model(
+    client: httpx2.AsyncClient,
+) -> None:
+    app.state.churn_dataset = None
+    app.state.churn_model = None
+
+    response = await client.get("/model/schema")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "features": [
+            {
+                "name": "monthly_fee",
+                "value_type": "number",
+                "group": "numeric",
+            },
+            {
+                "name": "usage_hours",
+                "value_type": "number",
+                "group": "numeric",
+            },
+            {
+                "name": "support_requests",
+                "value_type": "integer",
+                "group": "numeric",
+            },
+            {
+                "name": "account_age_months",
+                "value_type": "integer",
+                "group": "numeric",
+            },
+            {
+                "name": "failed_payments",
+                "value_type": "integer",
+                "group": "numeric",
+            },
+            {
+                "name": "autopay_enabled",
+                "value_type": "integer",
+                "group": "numeric",
+            },
+            {
+                "name": "region",
+                "value_type": "string",
+                "group": "categorical",
+            },
+            {
+                "name": "device_type",
+                "value_type": "string",
+                "group": "categorical",
+            },
+            {
+                "name": "payment_method",
+                "value_type": "string",
+                "group": "categorical",
+            },
+        ]
+    }
+
+
+async def test_model_schema_is_documented_in_openapi(
+    client: httpx2.AsyncClient,
+) -> None:
+    response = await client.get("/openapi.json")
+
+    assert response.status_code == 200
+    openapi = response.json()
+    operation = openapi["paths"]["/model/schema"]["get"]
+    response_schema = operation["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+
+    assert operation["summary"] == "Get the churn model input schema"
+    assert operation["description"]
+    assert response_schema == {
+        "$ref": "#/components/schemas/ModelSchemaChurn"
+    }
+    assert openapi["components"]["schemas"]["ModelFeatureSchemaChurn"][
+        "additionalProperties"
+    ] is False
+    assert openapi["components"]["schemas"]["ModelSchemaChurn"][
+        "additionalProperties"
+    ] is False
+
+
 async def test_predict_returns_class_and_probabilities_for_one_customer(
     client: httpx2.AsyncClient,
     valid_record: dict[str, object],

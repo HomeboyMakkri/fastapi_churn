@@ -9,11 +9,96 @@ from src.schemas import (
     DatasetRowChurn,
     DatasetSplitInfo,
     FeatureVectorChurn,
+    ModelFeatureSchemaChurn,
+    ModelSchemaChurn,
     ModelStatus,
     ModelTrainingInfo,
     PredictionResponseChurn,
     TrainingConfigChurn,
 )
+
+
+def test_model_schema_accepts_strict_feature_contract() -> None:
+    schema = ModelSchemaChurn(
+        features=[
+            ModelFeatureSchemaChurn(
+                name="monthly_fee",
+                value_type="number",
+                group="numeric",
+            ),
+            ModelFeatureSchemaChurn(
+                name="region",
+                value_type="string",
+                group="categorical",
+            ),
+        ]
+    )
+
+    assert schema.model_dump() == {
+        "features": [
+            {
+                "name": "monthly_fee",
+                "value_type": "number",
+                "group": "numeric",
+            },
+            {
+                "name": "region",
+                "value_type": "string",
+                "group": "categorical",
+            },
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "name": "monthly_fee",
+            "value_type": "float",
+            "group": "numeric",
+        },
+        {
+            "name": "monthly_fee",
+            "value_type": "number",
+            "group": "continuous",
+        },
+        {
+            "name": "monthly_fee",
+            "value_type": "number",
+            "group": "numeric",
+            "unexpected": True,
+        },
+    ],
+)
+def test_model_feature_schema_rejects_invalid_contract(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        ModelFeatureSchemaChurn.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"features": []},
+        {
+            "features": [
+                {
+                    "name": "monthly_fee",
+                    "value_type": "number",
+                    "group": "numeric",
+                }
+            ],
+            "unexpected": True,
+        },
+    ],
+)
+def test_model_schema_rejects_invalid_contract(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        ModelSchemaChurn.model_validate(payload)
 
 
 def test_feature_vector_accepts_valid_data(valid_record: dict[str, object]) -> None:

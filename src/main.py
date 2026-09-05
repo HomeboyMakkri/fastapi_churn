@@ -9,6 +9,7 @@ from fastapi.openapi.models import Example
 from sklearn.metrics import accuracy_score, f1_score
 
 from .dataset import ChurnDataset
+from .dataset_contract import CHURN_DATASET_CONTRACT
 from .model import ModelConfigurationError, train_churn_model
 from .model_store import (
     ChurnModelArtifact,
@@ -26,7 +27,11 @@ from .schemas import (
     DatasetInfo,
     DatasetRowChurn,
     DatasetSplitInfo,
+    FeatureGroup,
     FeatureVectorChurn,
+    FeatureValueType,
+    ModelFeatureSchemaChurn,
+    ModelSchemaChurn,
     ModelStatus,
     ModelTrainingInfo,
     PredictionPayload,
@@ -172,6 +177,46 @@ PreviewCount = Annotated[
 @app.get("/")
 def read_root():
     return {"message": "ml churn server is running"}
+
+
+def _get_feature_value_type(feature_name: str) -> FeatureValueType:
+    feature_schema = FeatureVectorChurn.model_json_schema()["properties"][
+        feature_name
+    ]
+    value_type = feature_schema.get("type")
+    if value_type not in ("number", "integer", "string"):
+        raise RuntimeError(
+            f"Unsupported JSON type for feature {feature_name!r}: {value_type!r}"
+        )
+
+    return cast(FeatureValueType, value_type)
+
+
+@app.get(
+    "/model/schema",
+    response_model=ModelSchemaChurn,
+    summary="Get the churn model input schema",
+    description=(
+        "Returns the ordered churn feature contract, including each feature's "
+        "expected JSON value type and preprocessing group. The schema is "
+        "available even when no dataset or trained model is loaded."
+    ),
+)
+def get_model_schema() -> ModelSchemaChurn:
+    """Return the ordered model-input contract without requiring runtime state."""
+    numeric_features = set(CHURN_DATASET_CONTRACT.numeric_features)
+    features = [
+        ModelFeatureSchemaChurn(
+            name=feature_name,
+            value_type=_get_feature_value_type(feature_name),
+            group=cast(
+                FeatureGroup,
+                "numeric" if feature_name in numeric_features else "categorical",
+            ),
+        )
+        for feature_name in CHURN_DATASET_CONTRACT.features
+    ]
+    return ModelSchemaChurn(features=features)
 
 
 PredictionRequest = Annotated[

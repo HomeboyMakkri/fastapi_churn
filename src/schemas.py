@@ -12,6 +12,8 @@ ClassProbabilities = dict[ChurnClassLabel, Probability]
 ModelType = Literal["logreg", "random_forest"]
 HyperparameterValue = str | int | FiniteFloat | bool | None
 Hyperparameters = dict[str, HyperparameterValue]
+FeatureValueType = Literal["number", "integer", "string"]
+FeatureGroup = Literal["numeric", "categorical"]
 
 
 class FeatureVectorChurn(BaseModel):
@@ -43,6 +45,32 @@ class FeatureVectorChurn(BaseModel):
     )
     autopay_enabled: Literal[0, 1] = Field(
         ..., description="Whether autopay is enabled for the customer"
+    )
+
+
+class ModelFeatureSchemaChurn(BaseModel):
+    """Describe one input feature expected by the churn model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, description="Input feature name")
+    value_type: FeatureValueType = Field(
+        ..., description="JSON value type expected for the feature"
+    )
+    group: FeatureGroup = Field(
+        ..., description="Preprocessing group assigned to the feature"
+    )
+
+
+class ModelSchemaChurn(BaseModel):
+    """Describe the ordered input contract of the churn model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    features: list[ModelFeatureSchemaChurn] = Field(
+        ...,
+        min_length=1,
+        description="Input features in the order used by the model",
     )
 
 
