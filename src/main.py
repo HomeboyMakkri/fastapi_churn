@@ -45,16 +45,18 @@ from .schemas import (
     FeatureVectorChurn,
     FeatureValueType,
     ModelFeatureSchemaChurn,
+    ModelMetricsResponse,
     ModelSchemaChurn,
     ModelStatus,
     ModelTrainingInfo,
+    ModelType,
     PredictionPayload,
     PredictionResponseChurn,
     PredictionResult,
     TrainingConfigChurn,
     TrainingHistoryEntry,
 )
-from .training_history import append_training_entry
+from .training_history import append_training_entry, load_training_history
 
 
 logger = logging.getLogger(__name__)
@@ -567,4 +569,50 @@ def get_model_status(request: Request) -> ModelStatus:
         ),
         model_type=artifact.model_type,
         hyperparameters=artifact.hyperparameters,
+    )
+
+
+@app.get(
+    "/model/metrics",
+    response_model=ModelMetricsResponse,
+    summary="Get churn model training metrics",
+    description=(
+        "Returns the latest matching training record and a bounded training "
+        "history ordered from newest to oldest. History can be filtered by "
+        "model type."
+    ),
+    responses={
+        500: {
+            "model": ErrorResponse,
+            "description": "Training history could not be loaded",
+            "content": {
+                "application/json": {
+                    "example": INTERNAL_SERVER_ERROR_EXAMPLE,
+                }
+            },
+        },
+    },
+)
+def get_model_metrics(
+    limit: int = Query(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum number of training records to return",
+    ),
+    model_type: ModelType | None = Query(
+        default=None,
+        description="Return only records for this classifier type",
+    ),
+) -> ModelMetricsResponse:
+    history = load_training_history(TRAINING_HISTORY_PATH)
+    if model_type is not None:
+        history = [
+            entry for entry in history if entry.model_type == model_type
+        ]
+
+    newest_first = list(reversed(history))
+    return ModelMetricsResponse(
+        latest=newest_first[0] if newest_first else None,
+        history=newest_first[:limit],
     )

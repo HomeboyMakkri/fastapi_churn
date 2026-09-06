@@ -52,9 +52,9 @@ def test_evaluate_churn_model_matches_sklearn_metrics() -> None:
         :, positive_class_index
     ]
     assert metrics == TrainingMetrics(
-        accuracy=accuracy_score(y_test, predictions),
-        f1=f1_score(y_test, predictions),
-        roc_auc=roc_auc_score(y_test, positive_probabilities),
+        accuracy=float(accuracy_score(y_test, predictions)),
+        f1=float(f1_score(y_test, predictions)),
+        roc_auc=float(roc_auc_score(y_test, positive_probabilities)),
     )
 
 
@@ -111,7 +111,8 @@ def test_train_model_evaluates_only_held_out_split(
     expected_split = prepare_and_split(dataset.dataframe)
     expected_X_test = expected_split[1]
     expected_y_test = expected_split[3]
-    evaluated: dict[str, pd.DataFrame | pd.Series] = {}
+    evaluated_features: pd.DataFrame | None = None
+    evaluated_target: pd.Series | None = None
     real_evaluate = evaluate_churn_model
 
     def capture_evaluation(
@@ -119,8 +120,9 @@ def test_train_model_evaluates_only_held_out_split(
         X_test: pd.DataFrame,
         y_test: pd.Series,
     ) -> TrainingMetrics:
-        evaluated["features"] = X_test
-        evaluated["target"] = y_test
+        nonlocal evaluated_features, evaluated_target
+        evaluated_features = X_test
+        evaluated_target = y_test
         return real_evaluate(pipeline, X_test, y_test)
 
     monkeypatch.setattr(main, "MODEL_PATH", tmp_path / "churn_model.joblib")
@@ -139,8 +141,10 @@ def test_train_model_evaluates_only_held_out_split(
         dataset=dataset,
     )
 
-    pd.testing.assert_frame_equal(evaluated["features"], expected_X_test)
-    pd.testing.assert_series_equal(evaluated["target"], expected_y_test)
+    assert evaluated_features is not None
+    assert evaluated_target is not None
+    pd.testing.assert_frame_equal(evaluated_features, expected_X_test)
+    pd.testing.assert_series_equal(evaluated_target, expected_y_test)
     assert result.model_dump() == {
         "accuracy": pytest.approx(0.7875),
         "f1": pytest.approx(0.0449438202247191),
