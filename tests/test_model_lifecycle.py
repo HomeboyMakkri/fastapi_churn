@@ -21,6 +21,7 @@ from src.model_store import (
 from src.preprocessing import CATEGORICAL_FEATURES, FEATURES, NUMERIC_FEATURES
 from src.schemas import (
     FeatureVectorChurn,
+    HyperparameterValue,
     PredictionResponseChurn,
     TrainingConfigChurn,
 )
@@ -106,7 +107,7 @@ def test_trained_and_restored_models_support_predict_endpoint(
     )
     restored_encoder = restored_preprocessor.named_transformers_["cat"]
     assert isinstance(restored_encoder, OneHotEncoder)
-    assert restored_encoder.handle_unknown == "ignore"
+    assert restored_encoder.get_params(deep=False)["handle_unknown"] == "ignore"
     transformer_columns = {
         name: tuple(columns)
         for name, _, columns in restored_preprocessor.transformers_
@@ -252,9 +253,10 @@ def test_training_creates_and_persists_random_forest(
     assert artifact.hyperparameters == config.hyperparameters
     classifier = artifact.pipeline.named_steps["classifier"]
     assert isinstance(classifier, RandomForestClassifier)
-    assert classifier.n_estimators == 10
-    assert classifier.max_depth == 3
-    assert classifier.random_state == 7
+    classifier_parameters = classifier.get_params(deep=False)
+    assert classifier_parameters["n_estimators"] == 10
+    assert classifier_parameters["max_depth"] == 3
+    assert classifier_parameters["random_state"] == 7
     assert persisted_artifact.model_type == artifact.model_type
     assert persisted_artifact.hyperparameters == artifact.hyperparameters
     status = main.get_model_status(request)
@@ -270,7 +272,7 @@ def test_training_creates_and_persists_random_forest(
     ],
 )
 def test_training_converts_configuration_errors_to_422(
-    hyperparameters: dict[str, object],
+    hyperparameters: dict[str, HyperparameterValue],
 ) -> None:
     dataset = ChurnDataset(main.DATASET_PATH)
     dataset.load()
@@ -287,8 +289,11 @@ def test_training_converts_configuration_errors_to_422(
     assert raised.value.status_code == 422
     assert isinstance(raised.value, ModelConfigurationApiError)
     assert raised.value.code == "model_configuration_error"
-    assert isinstance(raised.value.details, dict)
-    assert "hyperparameters" in raised.value.details["reason"]
+    details = raised.value.details
+    assert isinstance(details, dict)
+    reason = details.get("reason")
+    assert isinstance(reason, str)
+    assert "hyperparameters" in reason
     assert app_stub.state.churn_model is None
 
 

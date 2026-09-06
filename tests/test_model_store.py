@@ -149,7 +149,7 @@ def test_artifact_rejects_invalid_metadata(
     message: str,
 ) -> None:
     artifact = make_artifact()
-    values = {
+    values: dict[str, object] = {
         "pipeline": artifact.pipeline,
         "trained_at": artifact.trained_at,
         "accuracy": artifact.accuracy,

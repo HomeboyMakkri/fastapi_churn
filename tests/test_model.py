@@ -142,8 +142,10 @@ def test_classifier_uses_service_defaults() -> None:
     logistic_regression = create_churn_classifier("logreg")
     random_forest = create_churn_classifier("random_forest")
 
-    assert logistic_regression.max_iter == 1000
-    assert random_forest.random_state == 42
+    assert isinstance(logistic_regression, LogisticRegression)
+    assert isinstance(random_forest, RandomForestClassifier)
+    assert logistic_regression.get_params(deep=False)["max_iter"] == 1000
+    assert random_forest.get_params(deep=False)["random_state"] == 42
 
 
 @pytest.mark.parametrize(

@@ -226,6 +226,7 @@ async def http_exception_handler(
     exception: HTTPException,
 ) -> JSONResponse:
     """Normalize service and ordinary FastAPI HTTP exceptions."""
+    details: list[ErrorDetail] | dict[str, object] | None
     if isinstance(exception, ApiHTTPException):
         code = exception.code
         message = exception.message
@@ -240,7 +241,7 @@ async def http_exception_handler(
         details = (
             None
             if isinstance(exception.detail, str)
-            else {"detail": exception.detail}
+            else {"detail": cast(object, exception.detail)}
         )
 
     payload = ErrorResponse(code=code, message=message, details=details)
