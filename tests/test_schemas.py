@@ -10,10 +10,13 @@ from src.schemas import (
     DatasetSplitInfo,
     FeatureVectorChurn,
     ModelFeatureSchemaChurn,
+    ModelMetricsResponse,
     ModelSchemaChurn,
     ModelStatus,
     ModelTrainingInfo,
     PredictionResponseChurn,
+    TrainingHistoryEntry,
+    TrainingMetrics,
     TrainingConfigChurn,
 )
 
@@ -306,6 +309,98 @@ def test_model_training_info_rejects_metrics_outside_unit_interval(
 
     with pytest.raises(ValidationError):
         ModelTrainingInfo.model_validate(payload)
+
+
+def test_training_metrics_accepts_finite_unit_interval_values() -> None:
+    metrics = TrainingMetrics(accuracy=0.8, f1=0.5, roc_auc=0.72)
+
+    assert metrics.model_dump() == {
+        "accuracy": 0.8,
+        "f1": 0.5,
+        "roc_auc": 0.72,
+    }
+
+
+@pytest.mark.parametrize("field", ["accuracy", "f1", "roc_auc"])
+@pytest.mark.parametrize(
+    "value",
+    [-0.01, 1.01, float("nan"), float("inf"), float("-inf")],
+)
+def test_training_metrics_rejects_invalid_values(
+    field: str,
+    value: float,
+) -> None:
+    payload = {"accuracy": 0.8, "f1": 0.5, "roc_auc": 0.72}
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        TrainingMetrics.model_validate(payload)
+
+
+def test_training_history_entry_serializes_to_json_contract() -> None:
+    entry = TrainingHistoryEntry(
+        trained_at=datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc),
+        model_type="logreg",
+        hyperparameters={"C": 0.5, "fit_intercept": True},
+        metrics=TrainingMetrics(accuracy=0.8, f1=0.5, roc_auc=0.72),
+    )
+
+    assert entry.model_dump(mode="json") == {
+        "trained_at": "2026-09-06T12:00:00Z",
+        "model_type": "logreg",
+        "hyperparameters": {"C": 0.5, "fit_intercept": True},
+        "metrics": {"accuracy": 0.8, "f1": 0.5, "roc_auc": 0.72},
+    }
+
+
+def test_training_history_entry_rejects_naive_timestamp() -> None:
+    with pytest.raises(ValidationError, match="timezone information"):
+        TrainingHistoryEntry.model_validate(
+            {
+                "trained_at": datetime(2026, 9, 6, 12, 0),
+                "model_type": "logreg",
+                "hyperparameters": {},
+                "metrics": {"accuracy": 0.8, "f1": 0.5, "roc_auc": 0.72},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "trained_at": "2026-09-06T12:00:00Z",
+            "model_type": "svm",
+            "hyperparameters": {},
+            "metrics": {"accuracy": 0.8, "f1": 0.5, "roc_auc": 0.72},
+        },
+        {
+            "trained_at": "2026-09-06T12:00:00Z",
+            "model_type": "logreg",
+            "hyperparameters": {},
+            "metrics": {"accuracy": 0.8, "f1": 0.5, "roc_auc": 0.72},
+            "unexpected": True,
+        },
+    ],
+)
+def test_training_history_entry_rejects_invalid_contract(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        TrainingHistoryEntry.model_validate(payload)
+
+
+def test_model_metrics_response_accepts_empty_history() -> None:
+    response = ModelMetricsResponse(latest=None, history=[])
+
+    assert response.model_dump() == {"latest": None, "history": []}
+
+
+def test_model_metrics_response_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ModelMetricsResponse.model_validate(
+            {"latest": None, "history": [], "unexpected": True}
+        )
 
 
 def test_model_status_accepts_untrained_state() -> None:

@@ -2,7 +2,14 @@ from datetime import datetime
 from math import isclose
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    field_validator,
+    model_validator,
+)
 
 
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
@@ -198,10 +205,69 @@ class ModelTrainingInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     accuracy: float = Field(
-        ..., ge=0, le=1, description="Accuracy of the trained model"
+        ...,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+        description="Accuracy of the trained model",
     )
     f1: float = Field(
-        ..., ge=0, le=1, description="F1 score of the trained model"
+        ...,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+        description="F1 score of the trained model",
+    )
+
+
+class TrainingMetrics(ModelTrainingInfo):
+    """Quality metrics calculated for one completed training run."""
+
+    roc_auc: float = Field(
+        ...,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+        description="ROC AUC of the trained model",
+    )
+
+
+class TrainingHistoryEntry(BaseModel):
+    """Serializable metadata and metrics for one completed training run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trained_at: datetime = Field(
+        ..., description="Timezone-aware timestamp of the training run"
+    )
+    model_type: ModelType = Field(
+        ..., description="Type of churn classifier that was trained"
+    )
+    hyperparameters: Hyperparameters = Field(
+        ..., description="Hyperparameters requested for the classifier"
+    )
+    metrics: TrainingMetrics = Field(
+        ..., description="Metrics calculated on the test dataset"
+    )
+
+    @field_validator("trained_at")
+    @classmethod
+    def validate_trained_at_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("trained_at must include timezone information")
+        return value
+
+
+class ModelMetricsResponse(BaseModel):
+    """Latest training result and a bounded view of training history."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    latest: TrainingHistoryEntry | None = Field(
+        ..., description="Latest training record, if one is available"
+    )
+    history: list[TrainingHistoryEntry] = Field(
+        ..., description="Training records ordered from newest to oldest"
     )
 
 
