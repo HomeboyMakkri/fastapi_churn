@@ -25,6 +25,20 @@ from src.schemas import (
     PredictionResponseChurn,
     TrainingConfigChurn,
 )
+from src.training_history import (
+    TrainingHistoryPersistenceError,
+    load_training_history,
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_training_history(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    history_path = tmp_path / "training_history.json"
+    monkeypatch.setattr(main, "TRAINING_HISTORY_PATH", history_path)
+    return history_path
 
 
 def test_training_config_is_exposed_in_openapi() -> None:
@@ -144,6 +158,7 @@ def test_trained_and_restored_models_support_predict_endpoint(
 async def test_training_persists_model_and_next_lifespan_restores_it(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    isolate_training_history: Path,
 ) -> None:
     model_path = tmp_path / "models" / "churn_model.joblib"
     monkeypatch.setattr(main, "MODEL_PATH", model_path)
@@ -159,6 +174,7 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
 
     in_memory_artifact = main.app.state.churn_model
     persisted_artifact = load_churn_model(model_path)
+    history = load_training_history(isolate_training_history)
     ready_status = main.get_model_status(request)
     sample = dataset.dataframe.drop(columns="churn").iloc[[0]]
     assert isinstance(in_memory_artifact, ChurnModelArtifact)
@@ -169,6 +185,13 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
     assert persisted_artifact.hyperparameters == config.hyperparameters
     assert in_memory_artifact.model_type == config.model_type
     assert in_memory_artifact.hyperparameters == config.hyperparameters
+    assert len(history) == 1
+    assert history[0].trained_at == persisted_artifact.trained_at
+    assert history[0].model_type == config.model_type
+    assert history[0].hyperparameters == config.hyperparameters
+    assert history[0].metrics.accuracy == metrics.accuracy
+    assert history[0].metrics.f1 == metrics.f1
+    assert 0 <= history[0].metrics.roc_auc <= 1
     assert ready_status.is_trained is True
     assert ready_status.last_trained_at == persisted_artifact.trained_at
     assert ready_status.metrics == metrics
@@ -205,6 +228,7 @@ async def test_training_persists_model_and_next_lifespan_restores_it(
 def test_training_does_not_publish_model_when_persistence_fails(
     monkeypatch: pytest.MonkeyPatch,
     trained_artifact: ChurnModelArtifact,
+    isolate_training_history: Path,
 ) -> None:
     dataset = ChurnDataset(main.DATASET_PATH)
     dataset.load()
@@ -222,6 +246,81 @@ def test_training_does_not_publish_model_when_persistence_fails(
     with pytest.raises(ModelPersistenceError, match="simulated persistence failure"):
         main.train_model(request=request, config=config, dataset=dataset)
 
+    assert app_stub.state.churn_model is trained_artifact
+    assert load_training_history(isolate_training_history) == []
+
+
+def test_repeated_training_appends_history_in_chronological_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    isolate_training_history: Path,
+) -> None:
+    monkeypatch.setattr(main, "MODEL_PATH", tmp_path / "churn_model.joblib")
+    dataset = ChurnDataset(main.DATASET_PATH)
+    dataset.load()
+    app_stub = SimpleNamespace(state=SimpleNamespace(churn_model=None))
+    request = cast(Request, SimpleNamespace(app=app_stub))
+
+    main.train_model(
+        request=request,
+        config=TrainingConfigChurn(
+            model_type="logreg",
+            hyperparameters={"C": 0.75},
+        ),
+        dataset=dataset,
+    )
+    main.train_model(
+        request=request,
+        config=TrainingConfigChurn(
+            model_type="random_forest",
+            hyperparameters={"n_estimators": 10, "random_state": 7},
+        ),
+        dataset=dataset,
+    )
+
+    history = load_training_history(isolate_training_history)
+    assert [entry.model_type for entry in history] == [
+        "logreg",
+        "random_forest",
+    ]
+    assert history[0].hyperparameters == {"C": 0.75}
+    assert history[1].hyperparameters == {
+        "n_estimators": 10,
+        "random_state": 7,
+    }
+    assert history[0].trained_at <= history[1].trained_at
+
+
+def test_training_does_not_publish_model_when_history_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    trained_artifact: ChurnModelArtifact,
+) -> None:
+    model_path = tmp_path / "churn_model.joblib"
+    monkeypatch.setattr(main, "MODEL_PATH", model_path)
+    dataset = ChurnDataset(main.DATASET_PATH)
+    dataset.load()
+    app_stub = SimpleNamespace(
+        state=SimpleNamespace(churn_model=trained_artifact)
+    )
+    request = cast(Request, SimpleNamespace(app=app_stub))
+
+    def fail_to_append(*args: object, **kwargs: object) -> None:
+        raise TrainingHistoryPersistenceError("simulated history failure")
+
+    monkeypatch.setattr(main, "append_training_entry", fail_to_append)
+
+    with pytest.raises(
+        TrainingHistoryPersistenceError,
+        match="simulated history failure",
+    ):
+        main.train_model(
+            request=request,
+            config=TrainingConfigChurn(model_type="logreg"),
+            dataset=dataset,
+        )
+
+    assert model_path.is_file()
     assert app_stub.state.churn_model is trained_artifact
 
 
@@ -273,6 +372,7 @@ def test_training_creates_and_persists_random_forest(
 )
 def test_training_converts_configuration_errors_to_422(
     hyperparameters: dict[str, HyperparameterValue],
+    isolate_training_history: Path,
 ) -> None:
     dataset = ChurnDataset(main.DATASET_PATH)
     dataset.load()
@@ -295,6 +395,7 @@ def test_training_converts_configuration_errors_to_422(
     assert isinstance(reason, str)
     assert "hyperparameters" in reason
     assert app_stub.state.churn_model is None
+    assert load_training_history(isolate_training_history) == []
 
 
 def test_model_status_reports_untrained_state() -> None:

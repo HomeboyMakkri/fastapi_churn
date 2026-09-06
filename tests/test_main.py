@@ -34,6 +34,10 @@ async def client(
     tmp_path: Path,
 ) -> AsyncIterator[httpx2.AsyncClient]:
     monkeypatch.setattr("src.main.MODEL_PATH", tmp_path / "churn_model.joblib")
+    monkeypatch.setattr(
+        "src.main.TRAINING_HISTORY_PATH",
+        tmp_path / "training_history.json",
+    )
     transport = httpx2.ASGITransport(app=app)
 
     async with lifespan(app):
@@ -409,6 +413,10 @@ async def test_model_train_persists_model_and_lifespan_restores_it(
 ) -> None:
     model_path = tmp_path / "models" / "churn_model.joblib"
     monkeypatch.setattr("src.main.MODEL_PATH", model_path)
+    monkeypatch.setattr(
+        "src.main.TRAINING_HISTORY_PATH",
+        tmp_path / "training_history.json",
+    )
     transport = httpx2.ASGITransport(app=app)
 
     async with lifespan(app):

@@ -9,10 +9,10 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, statu
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.models import Example
 from fastapi.responses import JSONResponse
-from sklearn.metrics import accuracy_score, f1_score
 
 from .dataset import ChurnDataset
 from .dataset_contract import CHURN_DATASET_CONTRACT
+from .evaluation import evaluate_churn_model
 from .errors import (
     ApiHTTPException,
     DataPreparationError,
@@ -52,7 +52,9 @@ from .schemas import (
     PredictionResponseChurn,
     PredictionResult,
     TrainingConfigChurn,
+    TrainingHistoryEntry,
 )
+from .training_history import append_training_entry
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
 MODEL_PATH = PROJECT_ROOT / "models" / "churn_model.joblib"
+TRAINING_HISTORY_PATH = PROJECT_ROOT / "models" / "training_history.json"
 
 PREDICTION_REQUEST_EXAMPLES: dict[str, Example] = {
     "single_customer": {
@@ -514,25 +517,31 @@ def train_model(
     except ModelConfigurationError as error:
         raise ModelConfigurationApiError(str(error)) from error
 
-    predictions = pipeline.predict(X_test)
-    accuracy = float(accuracy_score(y_test, predictions))
-    f1 = float(f1_score(y_test, predictions))
+    metrics = evaluate_churn_model(pipeline, X_test, y_test)
 
+    trained_at = datetime.now(timezone.utc)
     artifact = ChurnModelArtifact(
         pipeline=pipeline,
-        trained_at=datetime.now(timezone.utc),
-        accuracy=accuracy,
-        f1=f1,
+        trained_at=trained_at,
+        accuracy=metrics.accuracy,
+        f1=metrics.f1,
         model_type=config.model_type,
         hyperparameters=config.hyperparameters,
     )
+    history_entry = TrainingHistoryEntry(
+        trained_at=trained_at,
+        model_type=config.model_type,
+        hyperparameters=config.hyperparameters,
+        metrics=metrics,
+    )
 
     save_churn_model(artifact, MODEL_PATH)
+    append_training_entry(history_entry, TRAINING_HISTORY_PATH)
     request.app.state.churn_model = artifact
 
     return ModelTrainingInfo(
-        accuracy=accuracy,
-        f1=f1,
+        accuracy=metrics.accuracy,
+        f1=metrics.f1,
     )
 
 
