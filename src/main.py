@@ -465,11 +465,30 @@ def predict_churn(
 ) -> PredictionResult:
     is_single_customer = isinstance(payload, FeatureVectorChurn)
     feature_vectors = [payload] if is_single_customer else payload
+    input_type = "single" if is_single_customer else "batch"
+    model_type = getattr(artifact, "model_type", "unknown")
+    logger.info(
+        "Processing /predict request: input_type=%s customer_count=%d model_type=%s",
+        input_type,
+        len(feature_vectors),
+        model_type,
+    )
     try:
         predictions = predict_churn_batch(artifact, feature_vectors)
     except Exception as error:
+        logger.exception(
+            "Churn prediction failed: input_type=%s customer_count=%d "
+            "model_type=%s",
+            input_type,
+            len(feature_vectors),
+            model_type,
+        )
         raise PredictionError from error
 
+    logger.info(
+        "Completed churn prediction: prediction_count=%d",
+        len(predictions),
+    )
     if is_single_customer:
         return predictions[0]
     return predictions
@@ -565,6 +584,15 @@ def train_model(
         X_train, X_test, y_train, y_test = prepare_and_split(dataframe)
     except (TypeError, ValueError) as error:
         raise DataPreparationError(str(error)) from error
+
+    logger.info(
+        "Starting churn model training: model_type=%s dataset_rows=%d "
+        "train_rows=%d test_rows=%d",
+        config.model_type,
+        len(dataframe),
+        len(X_train),
+        len(X_test),
+    )
     try:
         pipeline = train_churn_model(
             X_train,
@@ -596,6 +624,14 @@ def train_model(
     save_churn_model(artifact, MODEL_PATH)
     append_training_entry(history_entry, TRAINING_HISTORY_PATH)
     request.app.state.churn_model = artifact
+    logger.info(
+        "Completed churn model training: model_type=%s accuracy=%.6f "
+        "f1=%.6f model_path=%s",
+        config.model_type,
+        metrics.accuracy,
+        metrics.f1,
+        MODEL_PATH,
+    )
 
     return ModelTrainingInfo(
         accuracy=metrics.accuracy,
