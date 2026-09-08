@@ -178,17 +178,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.churn_model = None
 
     dataset = ChurnDataset(DATASET_PATH)
+    logger.info("Loading churn dataset from %s", DATASET_PATH)
     try:
         dataset.load()
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as error:
+        logger.warning(
+            "Could not load churn dataset from %s: error_type=%s",
+            DATASET_PATH,
+            type(error).__name__,
+        )
     else:
         app.state.churn_dataset = dataset
+        logger.info(
+            "Loaded churn dataset from %s with %d rows",
+            DATASET_PATH,
+            len(dataset.dataframe),
+        )
 
+    logger.info("Restoring churn model from %s", MODEL_PATH)
     try:
         app.state.churn_model = load_churn_model(MODEL_PATH)
-    except (OSError, ValueError, ModelPersistenceError):
-        pass
+    except FileNotFoundError:
+        logger.info("No saved churn model found at %s", MODEL_PATH)
+    except (OSError, ValueError, ModelPersistenceError) as error:
+        logger.warning(
+            "Could not restore churn model from %s: error_type=%s",
+            MODEL_PATH,
+            type(error).__name__,
+        )
+    else:
+        artifact = cast(ChurnModelArtifact, app.state.churn_model)
+        logger.info(
+            "Restored %s churn model trained at %s",
+            artifact.model_type,
+            artifact.trained_at.isoformat(),
+        )
 
     yield
 
@@ -203,7 +227,7 @@ app = FastAPI(
 
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(
-    _request: Request,
+    request: Request,
     exception: RequestValidationError,
 ) -> JSONResponse:
     """Return Pydantic request errors using the service error contract."""
@@ -220,6 +244,13 @@ async def request_validation_exception_handler(
         message="Request data is invalid",
         details=details,
     )
+    logger.warning(
+        "Request validation failed during %s %s: status=%d code=%s",
+        request.method,
+        request.url.path,
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        payload.code,
+    )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=payload.model_dump(mode="json"),
@@ -228,7 +259,7 @@ async def request_validation_exception_handler(
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(
-    _request: Request,
+    request: Request,
     exception: HTTPException,
 ) -> JSONResponse:
     """Normalize service and ordinary FastAPI HTTP exceptions."""
@@ -251,6 +282,13 @@ async def http_exception_handler(
         )
 
     payload = ErrorResponse(code=code, message=message, details=details)
+    logger.warning(
+        "HTTP error during %s %s: status=%d code=%s",
+        request.method,
+        request.url.path,
+        exception.status_code,
+        payload.code,
+    )
     return JSONResponse(
         status_code=exception.status_code,
         content=payload.model_dump(mode="json"),
