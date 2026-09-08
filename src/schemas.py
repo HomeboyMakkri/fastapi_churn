@@ -52,6 +52,19 @@ class ErrorResponse(BaseModel):
     )
 
 
+class HealthStatus(BaseModel):
+    """Describe whether the service's runtime resources are available."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_available: bool = Field(
+        ..., description="Whether a trained churn model is available"
+    )
+    dataset_loaded: bool = Field(
+        ..., description="Whether the churn dataset is loaded"
+    )
+
+
 class FeatureVectorChurn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
