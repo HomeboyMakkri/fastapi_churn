@@ -60,7 +60,7 @@ from .schemas import (
 from .training_history import append_training_entry, load_training_history
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error").getChild(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
