@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 import joblib
+import numpy as np
 import pytest
 from sklearn.dummy import DummyClassifier
 from sklearn.pipeline import Pipeline
@@ -42,7 +44,8 @@ def test_save_and_load_churn_model_round_trip(tmp_path: Path) -> None:
     assert restored.f1 == artifact.f1
     assert restored.model_type == artifact.model_type
     assert restored.hyperparameters == artifact.hyperparameters
-    assert restored.pipeline.predict([[2]]).tolist() == [0]
+    predictions = cast(np.ndarray, restored.pipeline.predict([[2]]))
+    assert predictions.tolist() == [0]
 
 
 def test_artifact_copies_hyperparameters() -> None:
