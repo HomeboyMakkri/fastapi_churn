@@ -5,17 +5,23 @@ import logging
 from pathlib import Path
 from typing import Annotated, cast
 
-from fastapi import Body, Depends, FastAPI, Query, Request
+from fastapi import Body, FastAPI, Query, Request
 
 from .dataset import ChurnDataset
 from .dataset_contract import CHURN_DATASET_CONTRACT
+from .dependencies import (
+    DatasetDependency,
+    ModelDependency,
+    PreviewCount,
+    get_churn_model,
+    get_dataset,
+)
 from .evaluation import evaluate_churn_model
 from .errors import (
     DataPreparationError,
     DatasetEmptyError,
     DatasetUnavailableError,
     ModelConfigurationApiError,
-    ModelNotTrainedError,
     PredictionError,
 )
 from .exception_handlers import (
@@ -131,32 +137,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 register_exception_handlers(app)
-
-
-def get_dataset(request: Request) -> ChurnDataset:
-    dataset = getattr(request.app.state, "churn_dataset", None)
-    if dataset is None:
-        raise DatasetUnavailableError
-
-    return cast(ChurnDataset, dataset)
-
-
-DatasetDependency = Annotated[ChurnDataset, Depends(get_dataset)]
-
-
-def get_churn_model(request: Request) -> ChurnModelArtifact:
-    artifact = getattr(request.app.state, "churn_model", None)
-    if artifact is None:
-        raise ModelNotTrainedError
-
-    return cast(ChurnModelArtifact, artifact)
-
-
-ModelDependency = Annotated[ChurnModelArtifact, Depends(get_churn_model)]
-PreviewCount = Annotated[
-    int,
-    Query(ge=1, le=100, description="Number of rows to preview"),
-]
 
 
 @app.get("/")
