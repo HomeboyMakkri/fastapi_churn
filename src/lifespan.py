@@ -16,32 +16,19 @@ from .model_store import (
 
 
 logger = logging.getLogger("uvicorn.error.src.main")
-_DEFAULT_DATASET_CLASS = ChurnDataset
-_DEFAULT_MODEL_LOADER = load_churn_model
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Reset runtime state, then independently load the dataset and model."""
-    from . import main as main_module
-
-    dataset_path = main_module.DATASET_PATH
-    model_path = main_module.MODEL_PATH
-    dataset_class = (
-        main_module.ChurnDataset
-        if main_module.ChurnDataset is not _DEFAULT_DATASET_CLASS
-        else ChurnDataset
-    )
-    model_loader = (
-        main_module.load_churn_model
-        if main_module.load_churn_model is not _DEFAULT_MODEL_LOADER
-        else load_churn_model
-    )
+    settings = app.state.settings
+    dataset_path = settings.dataset_path
+    model_path = settings.model_path
 
     app.state.churn_dataset = None
     app.state.churn_model = None
 
-    dataset = dataset_class(dataset_path)
+    dataset = ChurnDataset(dataset_path)
     logger.info("Loading churn dataset from %s", dataset_path)
     try:
         dataset.load()
@@ -61,7 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Restoring churn model from %s", model_path)
     try:
-        app.state.churn_model = model_loader(model_path)
+        app.state.churn_model = load_churn_model(model_path)
     except FileNotFoundError:
         logger.info("No saved churn model found at %s", model_path)
     except (OSError, ValueError, ModelPersistenceError) as error:

@@ -4,9 +4,14 @@ from typing import Annotated, cast
 
 from fastapi import Depends, Query, Request
 
+from .config import AppSettings
 from .dataset import ChurnDataset
 from .errors import DatasetUnavailableError, ModelNotTrainedError
 from .model_store import ChurnModelArtifact
+
+
+def get_settings(request: Request) -> AppSettings:
+    return cast(AppSettings, request.app.state.settings)
 
 
 def get_dataset(request: Request) -> ChurnDataset:
@@ -18,6 +23,7 @@ def get_dataset(request: Request) -> ChurnDataset:
 
 
 DatasetDependency = Annotated[ChurnDataset, Depends(get_dataset)]
+SettingsDependency = Annotated[AppSettings, Depends(get_settings)]
 
 
 def get_churn_model(request: Request) -> ChurnModelArtifact:

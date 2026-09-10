@@ -6,13 +6,22 @@ from typing import cast
 
 import pandas as pd
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from sklearn.pipeline import Pipeline
 
-from src import main
+from src.application import create_app
+from src.config import AppSettings
 from src.dataset import ChurnDataset
 from src.errors import ModelNotTrainedError, PredictionError
+from src.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from src import lifespan as lifespan_module
+from src.routers import prediction as prediction_router
+from src.routers.model import train_model
+from src.services import training as training_service
 from src.model_store import ChurnModelArtifact
 from src.schemas import (
     FeatureVectorChurn,
@@ -21,12 +30,14 @@ from src.schemas import (
     TrainingMetrics,
 )
 
+LOGGER_NAME = training_service.logger.name
+
 
 def logger_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [
         record
         for record in caplog.records
-        if record.name == main.logger.name
+        if record.name == LOGGER_NAME
     ]
 
 
@@ -95,16 +106,18 @@ async def test_lifespan_logs_successful_dataset_and_model_loading(
         hyperparameters={},
     )
     dataset = LoadedDatasetStub(dataset_path)
-    app_stub = SimpleNamespace(state=SimpleNamespace())
-    monkeypatch.setattr(main, "DATASET_PATH", dataset_path)
-    monkeypatch.setattr(main, "MODEL_PATH", model_path)
-    monkeypatch.setattr(main, "ChurnDataset", lambda _path: dataset)
-    monkeypatch.setattr(main, "load_churn_model", lambda _path: artifact)
-    caplog.set_level(logging.INFO, logger=main.logger.name)
+    app = create_app(AppSettings(dataset_path=dataset_path, model_path=model_path))
+    monkeypatch.setattr(lifespan_module, "ChurnDataset", lambda _path: dataset)
+    monkeypatch.setattr(
+        lifespan_module,
+        "load_churn_model",
+        lambda _path: artifact,
+    )
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
 
-    async with main.lifespan(cast(FastAPI, app_stub)):
-        assert app_stub.state.churn_dataset is dataset
-        assert app_stub.state.churn_model is artifact
+    async with lifespan_module.lifespan(app):
+        assert app.state.churn_dataset is dataset
+        assert app.state.churn_model is artifact
 
     messages = logger_messages(caplog)
     assert any("Loading churn dataset" in message for message in messages)
@@ -123,20 +136,18 @@ async def test_lifespan_logs_dataset_failure_and_missing_model(
     dataset_path = tmp_path / "invalid.csv"
     model_path = tmp_path / "missing.joblib"
     dataset = FailingDatasetStub(dataset_path)
-    app_stub = SimpleNamespace(state=SimpleNamespace())
+    app = create_app(AppSettings(dataset_path=dataset_path, model_path=model_path))
 
     def raise_missing_model(_path: Path) -> ChurnModelArtifact:
         raise FileNotFoundError("simulated missing model")
 
-    monkeypatch.setattr(main, "DATASET_PATH", dataset_path)
-    monkeypatch.setattr(main, "MODEL_PATH", model_path)
-    monkeypatch.setattr(main, "ChurnDataset", lambda _path: dataset)
-    monkeypatch.setattr(main, "load_churn_model", raise_missing_model)
-    caplog.set_level(logging.INFO, logger=main.logger.name)
+    monkeypatch.setattr(lifespan_module, "ChurnDataset", lambda _path: dataset)
+    monkeypatch.setattr(lifespan_module, "load_churn_model", raise_missing_model)
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
 
-    async with main.lifespan(cast(FastAPI, app_stub)):
-        assert app_stub.state.churn_dataset is None
-        assert app_stub.state.churn_model is None
+    async with lifespan_module.lifespan(app):
+        assert app.state.churn_dataset is None
+        assert app.state.churn_model is None
 
     records = logger_records(caplog)
     assert any(
@@ -167,9 +178,14 @@ def test_successful_training_is_logged_after_model_publication(
     pipeline = Pipeline(steps=[])
     metrics = TrainingMetrics(accuracy=0.8, f1=0.6, roc_auc=0.75)
     dataset = cast(ChurnDataset, TrainingDatasetStub(dataframe))
-    app_stub = SimpleNamespace(state=SimpleNamespace(churn_model=None))
     model_path = tmp_path / "models" / "churn_model.joblib"
     history_path = tmp_path / "models" / "training_history.json"
+    app = create_app(
+        AppSettings(
+            model_path=model_path,
+            training_history_path=history_path,
+        )
+    )
     persistence_events: list[str] = []
 
     def record_model_save(_artifact: ChurnModelArtifact, _path: Path) -> None:
@@ -178,17 +194,27 @@ def test_successful_training_is_logged_after_model_publication(
     def record_history_append(_entry: object, _path: Path) -> None:
         persistence_events.append("history")
 
-    monkeypatch.setattr(main, "MODEL_PATH", model_path)
-    monkeypatch.setattr(main, "TRAINING_HISTORY_PATH", history_path)
-    monkeypatch.setattr(main, "prepare_and_split", lambda _frame: split)
-    monkeypatch.setattr(main, "train_churn_model", lambda *_args, **_kwargs: pipeline)
-    monkeypatch.setattr(main, "evaluate_churn_model", lambda *_args: metrics)
-    monkeypatch.setattr(main, "save_churn_model", record_model_save)
-    monkeypatch.setattr(main, "append_training_entry", record_history_append)
-    caplog.set_level(logging.INFO, logger=main.logger.name)
+    monkeypatch.setattr(training_service, "prepare_and_split", lambda _frame: split)
+    monkeypatch.setattr(
+        training_service,
+        "train_churn_model",
+        lambda *_args, **_kwargs: pipeline,
+    )
+    monkeypatch.setattr(
+        training_service,
+        "evaluate_churn_model",
+        lambda *_args: metrics,
+    )
+    monkeypatch.setattr(training_service, "save_churn_model", record_model_save)
+    monkeypatch.setattr(
+        training_service,
+        "append_training_entry",
+        record_history_append,
+    )
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
 
-    response = main.train_model(
-        request=make_request(app_stub),
+    response = train_model(
+        request=make_request(app),
         config=TrainingConfigChurn(model_type="logreg"),
         dataset=dataset,
     )
@@ -196,7 +222,7 @@ def test_successful_training_is_logged_after_model_publication(
     assert response.accuracy == metrics.accuracy
     assert response.f1 == metrics.f1
     assert persistence_events == ["model", "history"]
-    assert isinstance(app_stub.state.churn_model, ChurnModelArtifact)
+    assert isinstance(app.state.churn_model, ChurnModelArtifact)
     messages = logger_messages(caplog)
     assert any(
         "Starting churn model training" in message
@@ -237,13 +263,13 @@ def test_single_and_batch_prediction_calls_are_logged(
         class_probabilities={"0": 0.8, "1": 0.2},
     )
     monkeypatch.setattr(
-        main,
+        prediction_router,
         "predict_churn_batch",
         lambda _artifact, vectors: [prediction for _ in vectors],
     )
-    caplog.set_level(logging.INFO, logger=main.logger.name)
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
 
-    main.predict_churn(payload, artifact)
+    prediction_router.predict_churn(payload, artifact)
 
     messages = logger_messages(caplog)
     assert any(
@@ -274,11 +300,11 @@ def test_prediction_failure_logs_traceback(
     def fail_prediction(*_args: object, **_kwargs: object) -> None:
         raise ValueError("simulated prediction failure")
 
-    monkeypatch.setattr(main, "predict_churn_batch", fail_prediction)
-    caplog.set_level(logging.ERROR, logger=main.logger.name)
+    monkeypatch.setattr(prediction_router, "predict_churn_batch", fail_prediction)
+    caplog.set_level(logging.ERROR, logger=LOGGER_NAME)
 
     with pytest.raises(PredictionError):
-        main.predict_churn(vector, artifact)
+        prediction_router.predict_churn(vector, artifact)
 
     failure_records = [
         record
@@ -311,9 +337,9 @@ async def test_validation_error_is_logged(
             ]
         ),
     )
-    caplog.set_level(logging.WARNING, logger=main.logger.name)
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
 
-    response = await main.request_validation_exception_handler(request, exception)
+    response = await request_validation_exception_handler(request, exception)
 
     assert response.status_code == 422
     assert any(
@@ -333,9 +359,9 @@ async def test_handled_http_error_is_logged(
         Request,
         SimpleNamespace(method="POST", url=SimpleNamespace(path="/predict")),
     )
-    caplog.set_level(logging.WARNING, logger=main.logger.name)
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
 
-    response = await main.http_exception_handler(request, ModelNotTrainedError())
+    response = await http_exception_handler(request, ModelNotTrainedError())
 
     assert response.status_code == 503
     assert any(

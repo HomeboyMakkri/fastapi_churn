@@ -5,9 +5,13 @@ from typing import cast
 import httpx2
 import pandas as pd
 import pytest
+from fastapi import FastAPI
 
+from src.application import create_app
+from src.config import AppSettings
 from src.dataset import ChurnDataset
-from src.main import app, get_dataset, lifespan
+from src.dependencies import get_dataset
+from src.lifespan import lifespan
 from src.model_store import ChurnModelArtifact, load_churn_model
 from src.preprocessing import CATEGORICAL_FEATURES, FEATURES, NUMERIC_FEATURES
 from src.schemas import FeatureVectorChurn
@@ -17,11 +21,15 @@ pytestmark = pytest.mark.anyio
 
 
 async def test_lifespan_keeps_service_available_without_dataset(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.main.DATASET_PATH", tmp_path / "missing.csv")
-    monkeypatch.setattr("src.main.MODEL_PATH", tmp_path / "missing.joblib")
+    app = create_app(
+        AppSettings(
+            dataset_path=tmp_path / "missing.csv",
+            model_path=tmp_path / "missing.joblib",
+            training_history_path=tmp_path / "history.json",
+        )
+    )
 
     async with lifespan(app):
         assert app.state.churn_dataset is None
@@ -30,14 +38,8 @@ async def test_lifespan_keeps_service_available_without_dataset(
 
 @pytest.fixture
 async def client(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    app: FastAPI,
 ) -> AsyncIterator[httpx2.AsyncClient]:
-    monkeypatch.setattr("src.main.MODEL_PATH", tmp_path / "churn_model.joblib")
-    monkeypatch.setattr(
-        "src.main.TRAINING_HISTORY_PATH",
-        tmp_path / "training_history.json",
-    )
     transport = httpx2.ASGITransport(app=app)
 
     async with lifespan(app):
@@ -57,6 +59,7 @@ async def test_root_reports_running_service(client: httpx2.AsyncClient) -> None:
 
 async def test_model_schema_is_available_without_dataset_or_model(
     client: httpx2.AsyncClient,
+    app: FastAPI,
 ) -> None:
     app.state.churn_dataset = None
     app.state.churn_model = None
@@ -154,6 +157,7 @@ async def test_model_schema_is_documented_in_openapi(
 
 async def test_predict_returns_class_and_probabilities_for_one_customer(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     valid_record: dict[str, object],
     trained_artifact: ChurnModelArtifact,
 ) -> None:
@@ -171,6 +175,7 @@ async def test_predict_returns_class_and_probabilities_for_one_customer(
 
 async def test_predict_returns_batch_in_request_order(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     valid_record: dict[str, object],
     trained_artifact: ChurnModelArtifact,
 ) -> None:
@@ -191,6 +196,7 @@ async def test_predict_returns_batch_in_request_order(
 
 async def test_predict_rejects_empty_batch(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     trained_artifact: ChurnModelArtifact,
 ) -> None:
     app.state.churn_model = trained_artifact
@@ -226,6 +232,7 @@ async def test_predict_returns_503_when_model_is_unavailable(
 )
 async def test_predict_rejects_invalid_payload(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     valid_record: dict[str, object],
     payload_change: tuple[str, str, object],
     trained_artifact: ChurnModelArtifact,
@@ -355,6 +362,7 @@ async def test_model_train_returns_test_metrics(
 )
 async def test_model_train_applies_and_stores_configuration(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     config: dict[str, object],
     expected_classifier_parameters: dict[str, object],
 ) -> None:
@@ -408,14 +416,14 @@ async def test_model_train_rejects_invalid_hyperparameters(
 
 
 async def test_model_train_persists_model_and_lifespan_restores_it(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     model_path = tmp_path / "models" / "churn_model.joblib"
-    monkeypatch.setattr("src.main.MODEL_PATH", model_path)
-    monkeypatch.setattr(
-        "src.main.TRAINING_HISTORY_PATH",
-        tmp_path / "training_history.json",
+    app = create_app(
+        AppSettings(
+            model_path=model_path,
+            training_history_path=tmp_path / "training_history.json",
+        )
     )
     transport = httpx2.ASGITransport(app=app)
 
@@ -495,6 +503,7 @@ async def test_model_status_reports_latest_training(
 
 async def test_model_train_returns_503_when_dataset_is_unavailable(
     client: httpx2.AsyncClient,
+    app: FastAPI,
 ) -> None:
     dataset = app.state.churn_dataset
     del app.state.churn_dataset
@@ -535,6 +544,7 @@ class DatasetStub:
 )
 async def test_model_train_returns_503_for_unusable_dataset(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     dataframe: pd.DataFrame | None,
     code: str,
     message: str,

@@ -6,13 +6,27 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from fastapi import FastAPI
 
+from src.application import create_app
+from src.config import AppSettings, PROJECT_ROOT
 from src.model import train_churn_model
 from src.model_store import ChurnModelArtifact
 from src.preprocessing import prepare_and_split
 
 
 CsvFactory = Callable[[list[dict[str, object]]], Path]
+
+
+@pytest.fixture
+def app(tmp_path: Path) -> FastAPI:
+    return create_app(
+        AppSettings(
+            dataset_path=PROJECT_ROOT / "data" / "churn_dataset.csv",
+            model_path=tmp_path / "churn_model.joblib",
+            training_history_path=tmp_path / "training_history.json",
+        )
+    )
 
 
 @pytest.fixture(autouse=True)

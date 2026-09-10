@@ -4,11 +4,15 @@ from typing import cast
 import httpx2
 import pandas as pd
 import pytest
+from fastapi import FastAPI
 
-from src import main
+from src.application import create_app
 from src.dataset import ChurnDataset
+from src.dependencies import get_churn_model, get_dataset
 from src.model import ModelConfigurationError
 from src.model_store import ChurnModelArtifact
+from src.routers import prediction as prediction_router
+from src.services import training as training_service
 
 
 pytestmark = pytest.mark.anyio
@@ -20,11 +24,10 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[httpx2.AsyncClient]:
-    main.app.dependency_overrides.clear()
-    main.app.state.churn_dataset = None
-    main.app.state.churn_model = None
-    transport = httpx2.ASGITransport(app=main.app)
+async def client(app: FastAPI) -> AsyncIterator[httpx2.AsyncClient]:
+    app.state.churn_dataset = None
+    app.state.churn_model = None
+    transport = httpx2.ASGITransport(app=app)
 
     async with httpx2.AsyncClient(
         transport=transport,
@@ -32,7 +35,7 @@ async def client() -> AsyncIterator[httpx2.AsyncClient]:
     ) as test_client:
         yield test_client
 
-    main.app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
 
 
 def prediction_payload(valid_record: dict[str, object]) -> dict[str, object]:
@@ -61,10 +64,11 @@ def assert_common_error_shape(payload: dict[str, object]) -> None:
 )
 async def test_predict_validation_errors_use_common_contract(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     valid_record: dict[str, object],
     change_payload: Callable[[dict[str, object]], object],
 ) -> None:
-    main.app.dependency_overrides[main.get_churn_model] = lambda: cast(
+    app.dependency_overrides[get_churn_model] = lambda: cast(
         ChurnModelArtifact,
         object(),
     )
@@ -83,8 +87,9 @@ async def test_predict_validation_errors_use_common_contract(
 
 async def test_predict_rejects_empty_batch_with_common_contract(
     client: httpx2.AsyncClient,
+    app: FastAPI,
 ) -> None:
-    main.app.dependency_overrides[main.get_churn_model] = lambda: cast(
+    app.dependency_overrides[get_churn_model] = lambda: cast(
         ChurnModelArtifact,
         object(),
     )
@@ -116,10 +121,11 @@ async def test_predict_without_model_returns_named_503_error(
 
 async def test_prediction_failure_hides_internal_error(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     valid_record: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    main.app.dependency_overrides[main.get_churn_model] = lambda: cast(
+    app.dependency_overrides[get_churn_model] = lambda: cast(
         ChurnModelArtifact,
         object(),
     )
@@ -127,7 +133,7 @@ async def test_prediction_failure_hides_internal_error(
     def fail_prediction(*args: object, **kwargs: object) -> None:
         raise ValueError("private scikit-learn implementation detail")
 
-    monkeypatch.setattr(main, "predict_churn_batch", fail_prediction)
+    monkeypatch.setattr(prediction_router, "predict_churn_batch", fail_prediction)
 
     response = await client.post(
         "/predict",
@@ -156,9 +162,10 @@ class DatasetStub:
 
 async def test_training_rejects_empty_dataset_with_named_error(
     client: httpx2.AsyncClient,
+    app: FastAPI,
 ) -> None:
     dataset = cast(ChurnDataset, DatasetStub(pd.DataFrame()))
-    main.app.dependency_overrides[main.get_dataset] = lambda: dataset
+    app.dependency_overrides[get_dataset] = lambda: dataset
 
     response = await client.post(
         "/model/train",
@@ -175,18 +182,19 @@ async def test_training_rejects_empty_dataset_with_named_error(
 
 async def test_training_translates_data_preparation_error(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dataset = cast(
         ChurnDataset,
         DatasetStub(pd.DataFrame({"placeholder": [1]})),
     )
-    main.app.dependency_overrides[main.get_dataset] = lambda: dataset
+    app.dependency_overrides[get_dataset] = lambda: dataset
 
     def fail_preparation(*args: object, **kwargs: object) -> None:
         raise ValueError("invalid training columns")
 
-    monkeypatch.setattr(main, "prepare_and_split", fail_preparation)
+    monkeypatch.setattr(training_service, "prepare_and_split", fail_preparation)
 
     response = await client.post(
         "/model/train",
@@ -203,25 +211,26 @@ async def test_training_translates_data_preparation_error(
 
 async def test_training_translates_model_configuration_error(
     client: httpx2.AsyncClient,
+    app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dataset = cast(
         ChurnDataset,
         DatasetStub(pd.DataFrame({"placeholder": [1]})),
     )
-    main.app.dependency_overrides[main.get_dataset] = lambda: dataset
+    app.dependency_overrides[get_dataset] = lambda: dataset
     split = (
         pd.DataFrame({"feature": [1]}),
         pd.DataFrame({"feature": [1]}),
         pd.Series([0]),
         pd.Series([0]),
     )
-    monkeypatch.setattr(main, "prepare_and_split", lambda dataframe: split)
+    monkeypatch.setattr(training_service, "prepare_and_split", lambda dataframe: split)
 
     def fail_training(*args: object, **kwargs: object) -> None:
         raise ModelConfigurationError("unsupported hyperparameters")
 
-    monkeypatch.setattr(main, "train_churn_model", fail_training)
+    monkeypatch.setattr(training_service, "train_churn_model", fail_training)
 
     response = await client.post(
         "/model/train",
@@ -237,7 +246,7 @@ async def test_training_translates_model_configuration_error(
 
 
 def test_train_and_predict_document_common_error_responses() -> None:
-    openapi = main.app.openapi()
+    openapi = create_app().openapi()
 
     for path in ("/predict", "/model/train"):
         operation = openapi["paths"][path]["post"]

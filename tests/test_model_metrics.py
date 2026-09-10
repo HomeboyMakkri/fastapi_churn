@@ -5,9 +5,11 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from fastapi import Request
+from fastapi import FastAPI, Request
 
-from src import main
+from src.application import create_app
+from src.exception_handlers import unhandled_exception_handler
+from src.routers.model import get_model_metrics
 from src.schemas import TrainingHistoryEntry, TrainingMetrics
 from src.training_history import (
     TrainingHistoryPersistenceError,
@@ -33,18 +35,21 @@ def make_entry(
 
 @pytest.fixture
 def history_path(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    app: FastAPI,
 ) -> Path:
-    path = tmp_path / "training_history.json"
-    monkeypatch.setattr(main, "TRAINING_HISTORY_PATH", path)
-    return path
+    return app.state.settings.training_history_path
+
+
+@pytest.fixture
+def app_request(app: FastAPI) -> Request:
+    return cast(Request, SimpleNamespace(app=app))
 
 
 def test_model_metrics_returns_empty_response_without_history(
     history_path: Path,
+    app_request: Request,
 ) -> None:
-    response = main.get_model_metrics(limit=10, model_type=None)
+    response = get_model_metrics(app_request, limit=10, model_type=None)
 
     assert not history_path.exists()
     assert response.model_dump() == {"latest": None, "history": []}
@@ -52,6 +57,7 @@ def test_model_metrics_returns_empty_response_without_history(
 
 def test_model_metrics_returns_latest_entries_first_and_applies_limit(
     history_path: Path,
+    app_request: Request,
 ) -> None:
     entries = [
         make_entry(1, "logreg"),
@@ -60,7 +66,7 @@ def test_model_metrics_returns_latest_entries_first_and_applies_limit(
     ]
     save_training_history(entries, history_path)
 
-    response = main.get_model_metrics(limit=2, model_type=None)
+    response = get_model_metrics(app_request, limit=2, model_type=None)
 
     assert response.latest == entries[2]
     assert response.history == [entries[2], entries[1]]
@@ -75,6 +81,7 @@ def test_model_metrics_returns_latest_entries_first_and_applies_limit(
 )
 def test_model_metrics_filters_history_by_model_type(
     history_path: Path,
+    app_request: Request,
     model_type: str,
     expected_indexes: list[int],
 ) -> None:
@@ -85,7 +92,8 @@ def test_model_metrics_filters_history_by_model_type(
     ]
     save_training_history(entries, history_path)
 
-    response = main.get_model_metrics(
+    response = get_model_metrics(
+        app_request,
         limit=10,
         model_type=model_type,  # type: ignore[arg-type]
     )
@@ -97,29 +105,36 @@ def test_model_metrics_filters_history_by_model_type(
 
 def test_model_metrics_returns_empty_response_for_filter_without_matches(
     history_path: Path,
+    app_request: Request,
 ) -> None:
     save_training_history([make_entry(1, "logreg")], history_path)
 
-    response = main.get_model_metrics(limit=10, model_type="random_forest")
+    response = get_model_metrics(
+        app_request,
+        limit=10,
+        model_type="random_forest",
+    )
 
     assert response.model_dump() == {"latest": None, "history": []}
 
 
 def test_model_metrics_propagates_invalid_history_error(
     history_path: Path,
+    app_request: Request,
 ) -> None:
     history_path.write_text("not valid JSON", encoding="utf-8")
 
     with pytest.raises(TrainingHistoryPersistenceError, match="Could not load"):
-        main.get_model_metrics(limit=10, model_type=None)
+        get_model_metrics(app_request, limit=10, model_type=None)
 
 
 @pytest.mark.anyio
 async def test_invalid_history_is_hidden_by_global_error_handler(
     history_path: Path,
+    app_request: Request,
 ) -> None:
     history_path.write_text("not valid JSON", encoding="utf-8")
-    request = cast(
+    log_request = cast(
         Request,
         SimpleNamespace(
             method="GET",
@@ -128,8 +143,8 @@ async def test_invalid_history_is_hidden_by_global_error_handler(
     )
 
     with pytest.raises(TrainingHistoryPersistenceError) as raised:
-        main.get_model_metrics(limit=10, model_type=None)
-    response = await main.unhandled_exception_handler(request, raised.value)
+        get_model_metrics(app_request, limit=10, model_type=None)
+    response = await unhandled_exception_handler(log_request, raised.value)
 
     assert response.status_code == 500
     assert json.loads(bytes(response.body)) == {
@@ -140,7 +155,7 @@ async def test_invalid_history_is_hidden_by_global_error_handler(
 
 
 def test_model_metrics_is_documented_in_openapi() -> None:
-    openapi = main.app.openapi()
+    openapi = create_app().openapi()
     operation = openapi["paths"]["/model/metrics"]["get"]
     parameters = {
         parameter["name"]: parameter for parameter in operation["parameters"]

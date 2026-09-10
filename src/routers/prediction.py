@@ -37,7 +37,6 @@ PredictionBatchFunction = Callable[
     [ChurnModelArtifact, list[FeatureVectorChurn]],
     list[PredictionResponseChurn],
 ]
-_DEFAULT_PREDICTION_FUNCTION = predict_churn_batch
 
 
 def _predict_churn(
@@ -127,16 +126,8 @@ def predict_churn(
     payload: PredictionRequest,
     artifact: ModelDependency,
 ) -> PredictionResult:
-    from ..main import predict_churn_batch as legacy_prediction_function
-
-    prediction_function = (
-        legacy_prediction_function
-        if legacy_prediction_function is not _DEFAULT_PREDICTION_FUNCTION
-        else predict_churn_batch
-    )
-
     return _predict_churn(
         payload,
         artifact,
-        prediction_function=prediction_function,
+        prediction_function=predict_churn_batch,
     )

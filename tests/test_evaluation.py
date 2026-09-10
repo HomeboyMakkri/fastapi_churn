@@ -9,12 +9,15 @@ from fastapi import Request
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.pipeline import Pipeline
 
-from src import main
+from src.application import create_app
+from src.config import AppSettings
 from src.dataset import ChurnDataset
 from src.evaluation import evaluate_churn_model
 from src.model import train_churn_model
 from src.preprocessing import prepare_and_split
 from src.schemas import TrainingConfigChurn, TrainingMetrics
+from src.routers.model import train_model
+from src.services import training as training_service
 
 
 def make_learnable_dataframe(row_count: int = 100) -> pd.DataFrame:
@@ -106,7 +109,11 @@ def test_train_model_evaluates_only_held_out_split(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    dataset = ChurnDataset(main.DATASET_PATH)
+    settings = AppSettings(
+        model_path=tmp_path / "churn_model.joblib",
+        training_history_path=tmp_path / "training_history.json",
+    )
+    dataset = ChurnDataset(settings.dataset_path)
     dataset.load()
     expected_split = prepare_and_split(dataset.dataframe)
     expected_X_test = expected_split[1]
@@ -125,17 +132,15 @@ def test_train_model_evaluates_only_held_out_split(
         evaluated_target = y_test
         return real_evaluate(pipeline, X_test, y_test)
 
-    monkeypatch.setattr(main, "MODEL_PATH", tmp_path / "churn_model.joblib")
     monkeypatch.setattr(
-        main,
-        "TRAINING_HISTORY_PATH",
-        tmp_path / "training_history.json",
+        training_service,
+        "evaluate_churn_model",
+        capture_evaluation,
     )
-    monkeypatch.setattr(main, "evaluate_churn_model", capture_evaluation)
-    app_stub = SimpleNamespace(state=SimpleNamespace(churn_model=None))
-    request = cast(Request, SimpleNamespace(app=app_stub))
+    app = create_app(settings)
+    request = cast(Request, SimpleNamespace(app=app))
 
-    result = main.train_model(
+    result = train_model(
         request=request,
         config=TrainingConfigChurn(model_type="logreg"),
         dataset=dataset,

@@ -8,16 +8,13 @@ from typing import cast
 from fastapi import APIRouter, Query, Request
 
 from ..dataset_contract import CHURN_DATASET_CONTRACT
-from ..dependencies import DatasetDependency
-from ..evaluation import evaluate_churn_model
-from ..model import train_churn_model
-from ..model_store import ChurnModelArtifact, save_churn_model
+from ..dependencies import DatasetDependency, get_settings
+from ..model_store import ChurnModelArtifact
 from ..openapi_examples import (
     DATASET_EMPTY_ERROR_EXAMPLE,
     INTERNAL_SERVER_ERROR_EXAMPLE,
     MODEL_CONFIGURATION_ERROR_EXAMPLE,
 )
-from ..preprocessing import prepare_and_split
 from ..schemas import (
     ErrorResponse,
     FeatureGroup,
@@ -32,36 +29,14 @@ from ..schemas import (
     TrainingConfigChurn,
     TrainingHistoryEntry,
 )
-from ..services.training import (
-    AppendHistoryFunction,
-    EvaluateModelFunction,
-    PrepareAndSplitFunction,
-    SaveModelFunction,
-    TrainModelFunction,
-    train_and_persist_churn_model,
-)
-from ..training_history import append_training_entry, load_training_history
+from ..services.training import train_and_persist_churn_model
+from ..training_history import load_training_history
 
 
 logger = logging.getLogger("uvicorn.error.src.main")
 router = APIRouter()
 
 LoadHistoryFunction = Callable[[Path], list[TrainingHistoryEntry]]
-_DEFAULT_PREPARE_FUNCTION = prepare_and_split
-_DEFAULT_TRAINING_FUNCTION = train_churn_model
-_DEFAULT_EVALUATION_FUNCTION = evaluate_churn_model
-_DEFAULT_SAVE_FUNCTION = save_churn_model
-_DEFAULT_APPEND_HISTORY_FUNCTION = append_training_entry
-_DEFAULT_LOAD_HISTORY_FUNCTION = load_training_history
-
-
-def _legacy_or_local(
-    legacy_value: object,
-    local_value: object,
-    default_value: object,
-) -> object:
-    """Honor temporary src.main monkeypatch seams during router migration."""
-    return legacy_value if legacy_value is not default_value else local_value
 
 
 def _get_feature_value_type(feature_name: str) -> FeatureValueType:
@@ -142,53 +117,13 @@ def train_model(
     config: TrainingConfigChurn,
     dataset: DatasetDependency,
 ) -> ModelTrainingInfo:
-    from .. import main as main_module
+    settings = get_settings(request)
 
     result = train_and_persist_churn_model(
         dataset,
         config,
-        model_path=main_module.MODEL_PATH,
-        training_history_path=main_module.TRAINING_HISTORY_PATH,
-        prepare_function=cast(
-            PrepareAndSplitFunction,
-            _legacy_or_local(
-                main_module.prepare_and_split,
-                prepare_and_split,
-                _DEFAULT_PREPARE_FUNCTION,
-            ),
-        ),
-        training_function=cast(
-            TrainModelFunction,
-            _legacy_or_local(
-                main_module.train_churn_model,
-                train_churn_model,
-                _DEFAULT_TRAINING_FUNCTION,
-            ),
-        ),
-        evaluation_function=cast(
-            EvaluateModelFunction,
-            _legacy_or_local(
-                main_module.evaluate_churn_model,
-                evaluate_churn_model,
-                _DEFAULT_EVALUATION_FUNCTION,
-            ),
-        ),
-        save_function=cast(
-            SaveModelFunction,
-            _legacy_or_local(
-                main_module.save_churn_model,
-                save_churn_model,
-                _DEFAULT_SAVE_FUNCTION,
-            ),
-        ),
-        append_history_function=cast(
-            AppendHistoryFunction,
-            _legacy_or_local(
-                main_module.append_training_entry,
-                append_training_entry,
-                _DEFAULT_APPEND_HISTORY_FUNCTION,
-            ),
-        ),
+        model_path=settings.model_path,
+        training_history_path=settings.training_history_path,
     )
     request.app.state.churn_model = result.artifact
     response = ModelTrainingInfo(
@@ -201,7 +136,7 @@ def train_model(
         config.model_type,
         response.accuracy,
         response.f1,
-        main_module.MODEL_PATH,
+        settings.model_path,
     )
     return response
 
@@ -273,6 +208,7 @@ def _get_model_metrics(
     },
 )
 def get_model_metrics(
+    request: Request,
     limit: int = Query(
         default=10,
         ge=1,
@@ -284,18 +220,11 @@ def get_model_metrics(
         description="Return only records for this classifier type",
     ),
 ) -> ModelMetricsResponse:
-    from .. import main as main_module
+    settings = get_settings(request)
 
     return _get_model_metrics(
         limit,
         model_type,
-        training_history_path=main_module.TRAINING_HISTORY_PATH,
-        load_history_function=cast(
-            LoadHistoryFunction,
-            _legacy_or_local(
-                main_module.load_training_history,
-                load_training_history,
-                _DEFAULT_LOAD_HISTORY_FUNCTION,
-            ),
-        ),
+        training_history_path=settings.training_history_path,
+        load_history_function=load_training_history,
     )

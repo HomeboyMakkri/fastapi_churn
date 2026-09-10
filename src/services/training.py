@@ -54,11 +54,11 @@ def train_and_persist_churn_model(
     *,
     model_path: Path,
     training_history_path: Path,
-    prepare_function: PrepareAndSplitFunction = prepare_and_split,
-    training_function: TrainModelFunction = train_churn_model,
-    evaluation_function: EvaluateModelFunction = evaluate_churn_model,
-    save_function: SaveModelFunction = save_churn_model,
-    append_history_function: AppendHistoryFunction = append_training_entry,
+    prepare_function: PrepareAndSplitFunction | None = None,
+    training_function: TrainModelFunction | None = None,
+    evaluation_function: EvaluateModelFunction | None = None,
+    save_function: SaveModelFunction | None = None,
+    append_history_function: AppendHistoryFunction | None = None,
 ) -> TrainingResult:
     """Train, evaluate, and persist a churn model without publishing app state.
 
@@ -67,6 +67,12 @@ def train_and_persist_churn_model(
     on disk, but callers must publish it to runtime state only after this function
     returns successfully.
     """
+    prepare_function = prepare_function or prepare_and_split
+    training_function = training_function or train_churn_model
+    evaluation_function = evaluation_function or evaluate_churn_model
+    save_function = save_function or save_churn_model
+    append_history_function = append_history_function or append_training_entry
+
     try:
         dataframe = dataset.dataframe
     except RuntimeError as error:

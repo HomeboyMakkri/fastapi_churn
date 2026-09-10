@@ -4,7 +4,8 @@ from typing import cast
 import pytest
 from fastapi import Request
 
-from src import main
+from src.application import create_app
+from src.routers.system import get_health
 from src.schemas import HealthStatus
 
 
@@ -37,7 +38,7 @@ def test_health_reports_runtime_resource_availability(
     model_available: bool,
     dataset_loaded: bool,
 ) -> None:
-    response = main.get_health(
+    response = get_health(
         make_request(
             model_available=model_available,
             dataset_loaded=dataset_loaded,
@@ -56,7 +57,7 @@ def test_health_handles_uninitialized_app_state() -> None:
         SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
     )
 
-    response = main.get_health(request)
+    response = get_health(request)
 
     assert response == HealthStatus(
         model_available=False,
@@ -65,7 +66,7 @@ def test_health_handles_uninitialized_app_state() -> None:
 
 
 def test_health_is_documented_in_openapi() -> None:
-    openapi = main.app.openapi()
+    openapi = create_app().openapi()
     operation = openapi["paths"]["/health"]["get"]
     response_schema = operation["responses"]["200"]["content"][
         "application/json"

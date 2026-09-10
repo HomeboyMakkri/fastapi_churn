@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from .config import AppSettings
 from .exception_handlers import register_exception_handlers
 from .lifespan import lifespan
 from .routers import (
@@ -12,7 +13,7 @@ from .routers import (
 )
 
 
-def create_app() -> FastAPI:
+def create_app(settings: AppSettings | None = None) -> FastAPI:
     """Create and configure an independent churn-service application."""
     app = FastAPI(
         title="ML Churn Server",
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    app.state.settings = settings if settings is not None else AppSettings()
     register_exception_handlers(app)
     app.include_router(system_router)
     app.include_router(dataset_router)

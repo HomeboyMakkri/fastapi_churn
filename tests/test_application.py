@@ -9,7 +9,6 @@ from src.exception_handlers import (
     request_validation_exception_handler,
     unhandled_exception_handler,
 )
-from src.main import app as default_app
 
 
 def test_create_app_returns_independent_fully_configured_instances(
@@ -21,17 +20,18 @@ def test_create_app_returns_independent_fully_configured_instances(
     monkeypatch.setattr(lifespan_module, "ChurnDataset", fail_if_called)
     monkeypatch.setattr(lifespan_module, "load_churn_model", fail_if_called)
 
+    reference_app = create_app()
     first_app = create_app()
     second_app = create_app()
 
     assert first_app is not second_app
-    assert first_app is not default_app
+    assert first_app is not reference_app
     assert first_app.state is not second_app.state
     first_app.state.marker = object()
     assert not hasattr(second_app.state, "marker")
 
-    assert first_app.openapi() == default_app.openapi()
-    assert second_app.openapi() == default_app.openapi()
+    assert first_app.openapi() == reference_app.openapi()
+    assert second_app.openapi() == reference_app.openapi()
     assert len(first_app.openapi()["paths"]) == 10
     assert first_app.exception_handlers[RequestValidationError] is (
         request_validation_exception_handler
