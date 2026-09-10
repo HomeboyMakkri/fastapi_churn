@@ -1,4 +1,6 @@
-from collections.abc import Callable
+import asyncio
+from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +13,36 @@ from src.preprocessing import prepare_and_split
 
 
 CsvFactory = Callable[[list[dict[str, object]]], Path]
+
+
+@pytest.fixture(autouse=True)
+async def _event_loop_wakeup_guard(
+    request: pytest.FixtureRequest,
+    anyio_backend: str,
+) -> AsyncIterator[None]:
+    """Keep worker-thread callbacks observable in restricted test environments.
+
+    Some restricted environments do not wake the asyncio selector after
+    ``call_soon_threadsafe()``. FastAPI runs synchronous endpoints in an AnyIO
+    worker thread, so the request would otherwise wait indefinitely even though
+    the worker completed. Periodically waking the loop is a test-only workaround.
+    """
+
+    async def wake_event_loop() -> None:
+        while True:
+            await asyncio.sleep(0.01)
+
+    if request.node.get_closest_marker("anyio") is None:
+        yield
+        return
+
+    wakeup_task = asyncio.create_task(wake_event_loop())
+    try:
+        yield
+    finally:
+        wakeup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await wakeup_task
 
 
 @pytest.fixture
