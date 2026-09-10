@@ -5,16 +5,12 @@ import logging
 from pathlib import Path
 from typing import Annotated, cast
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.openapi.models import Example
-from fastapi.responses import JSONResponse
+from fastapi import Body, Depends, FastAPI, Query, Request
 
 from .dataset import ChurnDataset
 from .dataset_contract import CHURN_DATASET_CONTRACT
 from .evaluation import evaluate_churn_model
 from .errors import (
-    ApiHTTPException,
     DataPreparationError,
     DatasetEmptyError,
     DatasetUnavailableError,
@@ -22,12 +18,28 @@ from .errors import (
     ModelNotTrainedError,
     PredictionError,
 )
+from .exception_handlers import (
+    http_exception_handler,
+    register_exception_handlers,
+    request_validation_exception_handler,
+    unhandled_exception_handler,
+)
 from .model import ModelConfigurationError, train_churn_model
 from .model_store import (
     ChurnModelArtifact,
     ModelPersistenceError,
     load_churn_model,
     save_churn_model,
+)
+from .openapi_examples import (
+    DATASET_EMPTY_ERROR_EXAMPLE,
+    INTERNAL_SERVER_ERROR_EXAMPLE,
+    MODEL_CONFIGURATION_ERROR_EXAMPLE,
+    MODEL_NOT_TRAINED_ERROR_EXAMPLE,
+    PREDICTION_FAILED_ERROR_EXAMPLE,
+    PREDICTION_REQUEST_EXAMPLES,
+    PREDICTION_RESPONSE_EXAMPLES,
+    PREDICTION_VALIDATION_ERROR_EXAMPLE,
 )
 from .prediction import predict_churn_batch
 from .preprocessing import (
@@ -39,7 +51,6 @@ from .schemas import (
     DatasetInfo,
     DatasetRowChurn,
     DatasetSplitInfo,
-    ErrorDetail,
     ErrorResponse,
     FeatureGroup,
     FeatureVectorChurn,
@@ -66,110 +77,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_PATH = PROJECT_ROOT / "data" / "churn_dataset.csv"
 MODEL_PATH = PROJECT_ROOT / "models" / "churn_model.joblib"
 TRAINING_HISTORY_PATH = PROJECT_ROOT / "models" / "training_history.json"
-
-PREDICTION_REQUEST_EXAMPLES: dict[str, Example] = {
-    "single_customer": {
-        "summary": "One customer",
-        "value": {
-            "monthly_fee": 79.99,
-            "usage_hours": 8.5,
-            "support_requests": 4,
-            "account_age_months": 6,
-            "failed_payments": 2,
-            "region": "europe",
-            "device_type": "mobile",
-            "payment_method": "card",
-            "autopay_enabled": 0,
-        },
-    },
-    "customer_batch": {
-        "summary": "Several customers",
-        "value": [
-            {
-                "monthly_fee": 29.99,
-                "usage_hours": 45.0,
-                "support_requests": 0,
-                "account_age_months": 36,
-                "failed_payments": 0,
-                "region": "europe",
-                "device_type": "desktop",
-                "payment_method": "card",
-                "autopay_enabled": 1,
-            },
-            {
-                "monthly_fee": 99.99,
-                "usage_hours": 4.0,
-                "support_requests": 6,
-                "account_age_months": 2,
-                "failed_payments": 3,
-                "region": "america",
-                "device_type": "mobile",
-                "payment_method": "paypal",
-                "autopay_enabled": 0,
-            },
-        ],
-    },
-}
-
-PREDICTION_RESPONSE_EXAMPLES = {
-    "single_customer": {
-        "summary": "Prediction for one customer",
-        "value": {
-            "predicted_class": 1,
-            "class_probabilities": {"0": 0.23, "1": 0.77},
-        },
-    },
-    "customer_batch": {
-        "summary": "Predictions in request order",
-        "value": [
-            {
-                "predicted_class": 0,
-                "class_probabilities": {"0": 0.84, "1": 0.16},
-            },
-            {
-                "predicted_class": 1,
-                "class_probabilities": {"0": 0.31, "1": 0.69},
-            },
-        ],
-    },
-}
-
-PREDICTION_VALIDATION_ERROR_EXAMPLE = {
-    "code": "request_validation_error",
-    "message": "Request data is invalid",
-    "details": [
-        {
-            "location": ["body", "monthly_fee"],
-            "message": "Field required",
-            "error_type": "missing",
-        }
-    ],
-}
-MODEL_NOT_TRAINED_ERROR_EXAMPLE = {
-    "code": "model_not_trained",
-    "message": "Churn model is not trained",
-    "details": None,
-}
-PREDICTION_FAILED_ERROR_EXAMPLE = {
-    "code": "prediction_failed",
-    "message": "Could not calculate churn prediction",
-    "details": None,
-}
-MODEL_CONFIGURATION_ERROR_EXAMPLE = {
-    "code": "model_configuration_error",
-    "message": "Model configuration is invalid",
-    "details": {"reason": "Unsupported hyperparameters for logreg: unknown"},
-}
-DATASET_EMPTY_ERROR_EXAMPLE = {
-    "code": "dataset_empty",
-    "message": "Churn dataset is empty",
-    "details": None,
-}
-INTERNAL_SERVER_ERROR_EXAMPLE = {
-    "code": "internal_server_error",
-    "message": "An unexpected server error occurred",
-    "details": None,
-}
 
 
 @asynccontextmanager
@@ -223,100 +130,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-
-
-@app.exception_handler(RequestValidationError)
-async def request_validation_exception_handler(
-    request: Request,
-    exception: RequestValidationError,
-) -> JSONResponse:
-    """Return Pydantic request errors using the service error contract."""
-    details = [
-        ErrorDetail(
-            location=list(error["loc"]),
-            message=error["msg"],
-            error_type=error["type"],
-        )
-        for error in exception.errors()
-    ]
-    payload = ErrorResponse(
-        code="request_validation_error",
-        message="Request data is invalid",
-        details=details,
-    )
-    logger.warning(
-        "Request validation failed during %s %s: status=%d code=%s",
-        request.method,
-        request.url.path,
-        status.HTTP_422_UNPROCESSABLE_CONTENT,
-        payload.code,
-    )
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content=payload.model_dump(mode="json"),
-    )
-
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(
-    request: Request,
-    exception: HTTPException,
-) -> JSONResponse:
-    """Normalize service and ordinary FastAPI HTTP exceptions."""
-    details: list[ErrorDetail] | dict[str, object] | None
-    if isinstance(exception, ApiHTTPException):
-        code = exception.code
-        message = exception.message
-        details = exception.details
-    else:
-        code = f"http_{exception.status_code}"
-        message = (
-            exception.detail
-            if isinstance(exception.detail, str)
-            else "HTTP request failed"
-        )
-        details = (
-            None
-            if isinstance(exception.detail, str)
-            else {"detail": cast(object, exception.detail)}
-        )
-
-    payload = ErrorResponse(code=code, message=message, details=details)
-    logger.warning(
-        "HTTP error during %s %s: status=%d code=%s",
-        request.method,
-        request.url.path,
-        exception.status_code,
-        payload.code,
-    )
-    return JSONResponse(
-        status_code=exception.status_code,
-        content=payload.model_dump(mode="json"),
-        headers=exception.headers,
-    )
-
-
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(
-    request: Request,
-    exception: Exception,
-) -> JSONResponse:
-    """Hide implementation details while retaining the traceback in logs."""
-    logger.error(
-        "Unhandled error during %s %s",
-        request.method,
-        request.url.path,
-        exc_info=(type(exception), exception, exception.__traceback__),
-    )
-    payload = ErrorResponse(
-        code="internal_server_error",
-        message="An unexpected server error occurred",
-        details=None,
-    )
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=payload.model_dump(mode="json"),
-    )
+register_exception_handlers(app)
 
 
 def get_dataset(request: Request) -> ChurnDataset:
