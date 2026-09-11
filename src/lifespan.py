@@ -1,8 +1,8 @@
 """Application lifespan for loading churn runtime resources."""
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-import logging
 from typing import cast
 
 from fastapi import FastAPI

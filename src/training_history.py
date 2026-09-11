@@ -1,7 +1,7 @@
 """Persist and restore churn-model training history as JSON."""
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import ValidationError

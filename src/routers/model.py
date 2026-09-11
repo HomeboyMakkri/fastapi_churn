@@ -1,7 +1,7 @@
 """Model schema, training, status, and metrics endpoints."""
 
-from collections.abc import Callable
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 

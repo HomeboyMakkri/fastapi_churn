@@ -1,8 +1,8 @@
 """Churn prediction endpoint."""
 
+import logging
 from collections.abc import Callable
 from typing import Annotated
-import logging
 
 from fastapi import APIRouter, Body
 

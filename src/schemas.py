@@ -1,3 +1,5 @@
+"""Pydantic schemas and shared API types for the churn service."""
+
 from datetime import datetime
 from math import isclose
 from typing import Annotated, Literal, Self

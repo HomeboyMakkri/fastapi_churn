@@ -23,7 +23,6 @@ def get_dataset(request: Request) -> ChurnDataset:
 
 
 DatasetDependency = Annotated[ChurnDataset, Depends(get_dataset)]
-SettingsDependency = Annotated[AppSettings, Depends(get_settings)]
 
 
 def get_churn_model(request: Request) -> ChurnModelArtifact:

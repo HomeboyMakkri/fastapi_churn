@@ -1,9 +1,9 @@
 """Orchestrate churn-model training and persistence."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import logging
 from pathlib import Path
 
 import pandas as pd
