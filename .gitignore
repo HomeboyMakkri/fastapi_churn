@@ -30,5 +30,5 @@ htmlcov/
 .agents/
 .codex/
 
-# Trained model artifacts
-models/*.joblib
+# Runtime model artifacts and training history
+models/

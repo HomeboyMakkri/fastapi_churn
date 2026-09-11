@@ -3,8 +3,8 @@ from pathlib import Path
 import pandas as pd
 from pydantic import ValidationError
 
-from src.dataset_contract import CHURN_DATASET_CONTRACT
-from src.schemas import DatasetRowChurn
+from .dataset_contract import CHURN_DATASET_CONTRACT
+from .schemas import DatasetRowChurn
 
 
 class ChurnDataset:
